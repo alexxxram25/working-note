@@ -186,6 +186,16 @@ def test_thresholds_with_up_to_three_decimals_are_read_as_their_canonical_value(
     assert Criterion(id="C1", threshold=value).threshold == expected
 
 
+@pytest.mark.parametrize("value", [0.0000000005, 0.9999999995, "0.0000000005", "99.99999995%"])
+def test_thresholds_that_round_onto_an_endpoint_are_refused(value):
+    # Within tolerance of 0.000 or 1.000, so the three-decimal check passes; the
+    # range must be judged on the canonical value, which is 0.0 or 1.0 here.
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        Criterion(id="C1", threshold=value)
+    assert Criterion(id="C1", threshold=0.001).threshold == 0.001
+    assert Criterion(id="C1", threshold=0.999).threshold == 0.999
+
+
 @pytest.mark.parametrize("value", [0.9125, "0.9125", "91.25%", 0.60001, 1 / 3])
 def test_thresholds_with_more_than_three_decimals_are_refused(value):
     # The calibration fingerprint and the Criteria snapshot both carry the threshold

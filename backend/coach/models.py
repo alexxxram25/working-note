@@ -101,15 +101,17 @@ class Criterion(BaseModel):
         number = parse_number(value)
         if number is None:
             return None
-        if not 0.0 < number < 1.0:
-            raise ValueError("threshold must be between 0 and 1, got {0}".format(number))
         # A calibration is identified by the threshold to three decimals (jev/questions.py);
         # a fourth decimal would grade one way and be looked up as another.
         if abs(number - round(number, 3)) > 1e-9:
             raise ValueError("threshold may have at most three decimals, got {0!r}".format(number))
         # The canonical value, not the one typed: 0.6000000005 is accepted as 0.6 and
         # must grade as 0.6, since 0.6 is what the calibration fingerprint says it is.
-        return round(number, 3)
+        # The range is checked on that value, so 0.0000000005 cannot slip in as 0.0.
+        canonical = round(number, 3)
+        if not 0.0 < canonical < 1.0:
+            raise ValueError("threshold must be between 0 and 1, got {0}".format(number))
+        return canonical
 
     @field_validator("active", mode="before")
     @classmethod
