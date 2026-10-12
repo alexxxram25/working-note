@@ -195,6 +195,15 @@ def test_nonfinite_numbers_are_422_not_500():
     response = start(client, settings=infinite)
     assert response.status_code == 422, response.text
     assert response.json()["detail"]["message"] == "Fix the Settings tab"
+    # An integer literal too large for a float parses as an int; float() of it is an
+    # OverflowError, which pydantic does not turn into a validation error on its own.
+    body = run_body()
+    body["lines"][0]["prior"] = 10 ** 400
+    response = client.post("/v1/runs", json=body, headers=as_preparer())
+    assert response.status_code == 422, response.text
+    assert "finite" in response.text
+    huge = [{"Setting": "Minimum sample size", "Value": 10 ** 400}]
+    assert start(client, settings=huge).status_code == 422
 
 
 def test_results_of_a_run_whose_lease_was_taken_over_are_discarded():

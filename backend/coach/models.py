@@ -31,7 +31,10 @@ def parse_number(value: Any) -> Optional[float]:
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        number = float(value)
+        try:
+            number = float(value)
+        except OverflowError:  # an int too large for a float; pydantic only converts ValueError
+            raise ValueError("not a finite number: {0!r}".format(value))
     else:
         text = str(value).strip()
         if not text or text.lower() in ("n/a", "na", "-", "none"):

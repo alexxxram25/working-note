@@ -193,7 +193,7 @@ def test_thresholds_with_more_than_three_decimals_are_refused(value):
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), "nan", "inf", "Infinity", "-Infinity",
-                                 "1e999", "#DIV/0!", "30,00O"])
+                                 "1e999", "#DIV/0!", "30,00O", 10 ** 400, -(10 ** 400)])
 def test_nonfinite_and_junk_numbers_are_refused_everywhere(bad):
     with pytest.raises(ValueError):
         parse_number(bad)
