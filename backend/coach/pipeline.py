@@ -20,7 +20,7 @@ log rows it returns, inside the run lock.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -49,9 +49,13 @@ class PipelineConfig:
     criteria_versions: Dict[str, int] = field(default_factory=dict)
     jev_concurrency: int = 8
     session_id: Optional[str] = None
-    # Called as each line's Jev answer arrives: the API renews the write lease
-    # here, so a long run does not outlive the lease it took at the start.
+    # Called at least every heartbeat_every seconds while Jev answers are
+    # outstanding, whether or not any arrived: the API renews the write lease
+    # here, so a long run does not outlive the lease it took at the start, and
+    # a slow answer cannot hold the renewal up. Raising from it abandons the
+    # run and cancels the Jev work not yet started.
     heartbeat: Optional[Callable[[], None]] = None
+    heartbeat_every: float = 1.0
 
 
 @dataclass
@@ -211,15 +215,22 @@ def run(config: PipelineConfig, lines: Sequence[LineIn],
 
     responses: Dict[str, Any] = {}
     if to_jev and askable:
-        with ThreadPoolExecutor(max_workers=max(1, config.jev_concurrency)) as pool:
-            futures = {item.line.line_id: pool.submit(ask, item) for item in to_jev}
-            for line_id, future in futures.items():
-                try:
-                    responses[line_id] = future.result()
-                except JevError as exc:
-                    responses[line_id] = exc
+        pool = ThreadPoolExecutor(max_workers=max(1, config.jev_concurrency))
+        try:
+            futures = {pool.submit(ask, item): item.line.line_id for item in to_jev}
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=config.heartbeat_every, return_when=FIRST_COMPLETED)
+                for future in done:
+                    try:
+                        responses[futures[future]] = future.result()
+                    except JevError as exc:
+                        responses[futures[future]] = exc
                 if config.heartbeat is not None:
                     config.heartbeat()
+        finally:
+            # On the way out of a failed run, nothing queued is worth asking.
+            pool.shutdown(wait=True, cancel_futures=True)
 
     jev_requests = 0
     for item in to_jev:

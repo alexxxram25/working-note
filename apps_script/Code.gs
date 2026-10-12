@@ -142,9 +142,11 @@ function runCoach_(options) {
       alert_('There are no lines in the Flux tab to check.');
       return null;
     }
+    // Rows that cannot be sent are marked now, before the service is called, so a
+    // run that fails (a 422, a 503, a dropped connection) cannot leave them showing
+    // the Passed and the feedback of some earlier run.
+    writeResults_(flux, table, [], {}, [], problems);
     if (!lines.length) {
-      // Every line has a cell the service could not have read: say which, send nothing.
-      writeResults_(flux, table, [], {}, problems);
       alert_('Run Coach: no line could be checked.\n- ' + problems.map(p => p.error).join('\n- '));
       return null;
     }
@@ -169,7 +171,7 @@ function runCoach_(options) {
     // while the run was in flight. A line whose commentary changed meanwhile
     // gets no feedback, because the feedback would be about text that is gone.
     const current = readTable_(flux, FLUX_COLUMNS);
-    const outcome = writeResults_(flux, current, body.results, sent, problems.concat(body.rejected || []));
+    const outcome = writeResults_(flux, current, body.results, sent, body.rejected || [], []);
     written = outcome.written;
     stale = outcome.stale;
 
@@ -228,23 +230,26 @@ function readLines_(table) {
     else lines.push(line);
   });
   // A Line ID on two rows is two rows with one identity: the service would file
-  // one row's verdict under the other's text. Neither is sent; both say why.
+  // one row's verdict under the other's text. Neither is sent; both say why, and a
+  // row that also has a broken cell is told about both.
   const rowsById = {};
   lines.concat(problems).forEach(l => { (rowsById[l.line_id] = rowsById[l.line_id] || []).push(l.row); });
+  const duplicateReason = id => 'Line ID appears on rows ' + rowsById[id].slice().sort((a, b) => a - b).join(', ') +
+    ': add a slice (entity|period|basis|account|slice) so each row has its own';
+  problems.forEach(p => { if (rowsById[p.line_id].length > 1) p.error += '; ' + duplicateReason(p.line_id); });
   const kept = [];
   lines.forEach(line => {
-    const rows = rowsById[line.line_id];
-    if (rows.length === 1) {
-      kept.push(line);
-      return;
-    }
-    problems.push({ line_id: line.line_id, row: line.row, error: 'Line ID appears on rows ' +
-      rows.slice().sort((a, b) => a - b).join(', ') + ': add a slice (entity|period|basis|account|slice) so each row has its own' });
+    if (rowsById[line.line_id].length === 1) kept.push(line);
+    else problems.push({ line_id: line.line_id, row: line.row, error: duplicateReason(line.line_id) });
   });
   return { lines: kept, problems: problems };
 }
 
-function writeResults_(sheet, table, results, sent, rejected) {
+// results and rejected come from the service and attach by Line ID (the sheet may
+// have been re-sorted while the run was in flight). problems were found in this
+// script a moment ago, before anything was sent, and attach by row: each names
+// its own cells, so two rows sharing an ID keep their own diagnostics.
+function writeResults_(sheet, table, results, sent, rejected, problems) {
   const col = table.columns;
   const byId = {};
   const rowsById = {};
@@ -284,6 +289,10 @@ function writeResults_(sheet, table, results, sent, rejected) {
       updates.push({ row: row.rowIndex, status: 'Not graded: ' + item.error, failed: '', feedback: '', note: '',
         style: STATUS_STYLES.error });
     });
+  });
+  (problems || []).forEach(item => {
+    updates.push({ row: item.row, status: 'Not graded: ' + item.error, failed: '', feedback: '', note: '',
+      style: STATUS_STYLES.error });
   });
   if (updates.length) {
     // One read and one write per column, not one call per cell: on a 40-line

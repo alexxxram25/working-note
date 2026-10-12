@@ -130,6 +130,177 @@ def test_rounded_cache_rows_from_before_0005_are_never_read(fresh_db):
     assert store.jev_cache_get("q:old").probability == 0.89996
 
 
+def test_cache_rows_an_older_service_writes_after_the_migrations_are_never_read(fresh_db):
+    """Migrate first, deploy later: whatever the still-running old service caches in between is legacy.
+
+    The old service omits precision_generation and inserts the probability rounded
+    to four decimals. 0005 made 2 the column default, so such a row looked exact
+    and a cached rerun passed a line the live run had failed. 0007 puts the default
+    back to 1, and the service reads a generation that was never a default.
+    """
+    from coach.jev.client import JevAnswer
+    from coach.jev.thresholds import grade
+    from coach.store.postgres import JEV_CACHE_GENERATION, PostgresStore
+
+    with psycopg.connect(fresh_db) as conn:
+        # Exactly the old service's statement: no generation named, value already rounded.
+        conn.execute(
+            "insert into jev_responses (fingerprint, model_snapshot, question_id, probability, source,"
+            " input_tokens, cost_usd) values ('q:legacy', 'typesafe/jev-1.13-20260917', 'C1', %s, 'live', 10, null)",
+            (round(0.89996, 4),))
+        # And a row from the window in which 2 was the default.
+        conn.execute(
+            "insert into jev_responses (fingerprint, precision_generation, model_snapshot, question_id,"
+            " probability, source) values ('q:window', 2, 'typesafe/jev-1.13-20260917', 'C1', 0.9, 'live')")
+        default = conn.execute("select column_default from information_schema.columns where table_name ="
+                               " 'jev_responses' and column_name = 'precision_generation'").fetchone()[0]
+        legacy_generation = conn.execute(
+            "select precision_generation from jev_responses where fingerprint = 'q:legacy'").fetchone()[0]
+    assert default == "1" and legacy_generation == 1
+    assert JEV_CACHE_GENERATION not in (1, 2), "the service must read a generation that was never a default"
+    store = PostgresStore(fresh_db)
+    assert store.jev_cache_get("q:legacy") is None and store.jev_cache_get("q:window") is None
+    # The live answer is cached exactly and grades as the live run did; the legacy row never speaks.
+    store.jev_cache_put("q:legacy", "C1", JevAnswer(0.89996, "typesafe/jev-1.13-20260917", "live"), {})
+    cached = store.jev_cache_get("q:legacy").probability
+    assert cached == 0.89996 and grade(cached, 0.9, True).result == "fail"
+
+
+def _store_run(store, sheet, run_id):
+    store.create_run(dict(run_id=run_id, sheet_id=sheet, role="preparer", auth_method="local",
+                          attribution_verified=False, settings={}, question_builder_version="qb",
+                          model_pin="jev-1.13.0", jev_mode="replay"))
+
+
+def _hold_lease_row(dsn, sheet):
+    """A transaction holding the lease row's lock, the way a committing fence does."""
+    conn = psycopg.connect(dsn)
+    conn.execute("select 1 from run_locks where sheet_id = %s for update", (sheet,))
+    return conn
+
+
+def test_the_fence_judges_expiry_after_waiting_for_the_lease_row(fresh_db):
+    """now() is fixed at transaction start; a fence that waited must use the clock after the wait."""
+    import threading
+    import time
+
+    from coach.models import LineIn
+    from coach.store.base import LeaseLost
+    from coach.store.postgres import PostgresStore
+
+    store = PostgresStore(fresh_db)
+    run_id = str(uuid.uuid4())
+    assert store.acquire_lock("s1", run_id, "a@example.com", 1).acquired  # a one-second lease
+    _store_run(store, "s1", run_id)
+    blocker = _hold_lease_row(fresh_db, "s1")
+    outcome = {}
+
+    def write():
+        try:
+            store.record_evaluation("s1", run_id, [LineIn(line_id="E|2026-09|MoM|1", commentary="x")], [dict(
+                close_period="2026-09", line_id="E|2026-09|MoM|1", attempt_number=1, commentary_hash="h",
+                criterion_id="C1", result="pass")], {"lines_evaluated": 1})
+            outcome["wrote"] = True
+        except LeaseLost:
+            outcome["lost"] = True
+
+    writer = threading.Thread(target=write)
+    writer.start()
+    time.sleep(1.5)  # the writer is queued behind the blocker; the lease expires meanwhile
+    blocker.rollback()
+    blocker.close()
+    writer.join(timeout=10)
+    assert outcome == {"lost": True}, outcome
+    with psycopg.connect(fresh_db) as conn:
+        assert conn.execute("select count(*) from log").fetchone()[0] == 0
+        assert conn.execute("select count(*) from lines").fetchone()[0] == 0
+
+
+def test_renewal_after_waiting_does_not_revive_an_expired_lease(fresh_db):
+    import threading
+    import time
+
+    from coach.store.postgres import PostgresStore
+
+    store = PostgresStore(fresh_db)
+    run_id = str(uuid.uuid4())
+    assert store.acquire_lock("s1", run_id, "a@example.com", 1).acquired
+    blocker = _hold_lease_row(fresh_db, "s1")
+    outcome = {}
+    renewer = threading.Thread(target=lambda: outcome.setdefault("renewed", store.renew_lock("s1", run_id, 600)))
+    renewer.start()
+    time.sleep(1.5)
+    blocker.rollback()
+    blocker.close()
+    renewer.join(timeout=10)
+    assert outcome == {"renewed": False}
+    # Expired means expired: the next run takes the sheet.
+    assert store.acquire_lock("s1", str(uuid.uuid4()), "b@example.com", 60).acquired
+
+
+def test_criteria_recorded_by_an_older_service_are_reconciled_on_the_next_run(fresh_db):
+    """Migrate first, deploy later: the old service advances the history but never criteria_current.
+
+    Old service records A (the pointer is backfilled to A), then records B: history
+    is at version 2 (B), the pointer still says A. The new service then receives A.
+    Trusting the pointer alone it would report no change and log version 2, which
+    describes B, against text graded as A.
+    """
+    from fastapi.testclient import TestClient
+
+    import fernhill
+    from coach import criteria_versions
+    from coach.api import build_services, create_app
+    from coach.config import Config
+    from coach.models import Criterion
+    from helpers import FakeJev
+
+    services = build_services(Config(env="development", store="postgres", database_url=fresh_db,
+                                     auth_modes=("local",), jev_mode="replay"))
+    services.jev = FakeJev()
+    client = TestClient(create_app(services=services), raise_server_exceptions=False)
+    sheet = "s1"
+    rows_a = fernhill.criteria_rows()
+    body = {"sheet_id": sheet, "criteria": rows_a, "settings": fernhill.settings_rows(),
+            "lines": [l.model_dump() for l in fernhill.lines_for("2026-09")]}
+    first = client.post("/v1/runs", json=body)
+    assert first.status_code == 200, first.text
+    client.post("/v1/runs/{0}/complete".format(first.json()["run_id"]), json={"sheet_id": sheet})
+
+    # The old service's write of B: a snapshot row and a history row, no pointer update.
+    rows_b = [dict(r) for r in rows_a]
+    rows_b[0]["Feedback when failed"] = "B: who or what, specifically?"
+    digest_b, content_b = criteria_versions.snapshot([Criterion.from_sheet_row(r) for r in rows_b])
+    c1_b = Criterion.from_sheet_row(rows_b[0])
+    with psycopg.connect(fresh_db) as conn:
+        from psycopg.types.json import Jsonb
+        snap = conn.execute(
+            "insert into criteria_snapshots (sheet_id, content_hash, criteria, captured_by) values (%s, %s, %s, 'old')"
+            " returning id", (sheet, digest_b, Jsonb(content_b))).fetchone()[0]
+        conn.execute(
+            "insert into criteria_history (sheet_id, criterion_id, version, content, content_hash, fields_changed,"
+            " diff, calibration_impact, snapshot_id) values (%s, 'C1', 2, %s, %s, %s, '{}', 'none', %s)",
+            (sheet, Jsonb(c1_b.sheet_content()), criteria_versions.content_hash(c1_b.sheet_content()),
+             ["Feedback when failed"], snap))
+        conn.commit()
+        pointer = conn.execute("select content_hash from criteria_current where sheet_id = %s", (sheet,)).fetchone()[0]
+    assert pointer == criteria_versions.snapshot([Criterion.from_sheet_row(r) for r in rows_a])[0]
+
+    second = client.post("/v1/runs", json=body)  # the tab shows A
+    assert second.status_code == 200, second.text
+    out = second.json()
+    change = {c["criterion_id"]: c for c in out["criteria_changes"]}["C1"]
+    assert change["version"] == 3 and change["before"].startswith("Feedback when failed: B:")
+    assert {c["id"]: c["version"] for c in out["criteria_status"]}["C1"] == 3
+    with psycopg.connect(fresh_db) as conn:
+        versions = conn.execute(
+            "select distinct criterion_version from log where run_id = %s and criterion_id = 'C1'",
+            (out["run_id"],)).fetchall()
+        current = conn.execute("select content_hash from criteria_current where sheet_id = %s", (sheet,)).fetchone()[0]
+    assert [v[0] for v in versions] == [3], "the Log carries the version that describes the tab as graded"
+    assert current == pointer
+
+
 def test_resubmitted_override_is_a_no_op(fresh_db):
     insert = (
         "insert into overrides (sheet_id, close_period, line_id, kind, criterion_id, not_covered,"

@@ -513,11 +513,57 @@ test('a Line ID the service rejects is marked on every row that carries it', () 
   const table = env.coach.readTable_(flux, env.constants.FLUX_COLUMNS);
   flux.setValueAt(3, 'Line ID', 'FHD-US|2026-09|MoM|5000'); // the sheet changed under us: two rows, one ID
   const current = env.coach.readTable_(flux, env.constants.FLUX_COLUMNS);
-  env.coach.writeResults_(flux, current, [], {}, [{ line_id: 'FHD-US|2026-09|MoM|5000', error: 'Line ID appears 2 times in this run (rows 2, 3); none was graded' }]);
+  env.coach.writeResults_(flux, current, [], {}, [{ line_id: 'FHD-US|2026-09|MoM|5000', error: 'Line ID appears 2 times in this run (rows 2, 3); none was graded' }], []);
   assert.equal(flux.value(2, 'Status'), 'Not graded: Line ID appears 2 times in this run (rows 2, 3); none was graded');
   assert.equal(flux.value(3, 'Status'), 'Not graded: Line ID appears 2 times in this run (rows 2, 3); none was graded');
   assert.equal(flux.value(4, 'Status'), '', 'an unrelated row is untouched');
   assert.ok(table.rows.length === 3);
+});
+
+// A row the script keeps home must not go on showing an earlier run's verdict when
+// the service call for the other rows fails, whichever way it fails.
+for (const [label, reply] of [
+  ['a 422', () => json(422, { detail: { message: 'Fix the Criteria tab', problems: ['Criteria row 2: threshold must be between 0 and 1'] } })],
+  ['a 503', () => json(503, { detail: 'unavailable' })],
+  ['a dropped connection', () => { throw new Error('Address unavailable'); }],
+]) {
+  test(`a row with a broken cell loses its old Passed even when the service answers ${label}`, () => {
+    const env = setup();
+    const flux = env.ss.getSheetByName('Flux');
+    const ar = flux.rowWhere('Line ID', 'FHD-US|2026-09|MoM|1200');
+    flux.setValueAt(ar, 'Status', 'Passed');
+    flux.setValueAt(ar, 'Feedback', 'OLD FEEDBACK');
+    flux.setValueAt(ar, 'Current', '#DIV/0!');
+    const svc = service({ 'POST /v1/runs': reply });
+    env.state.fetch = svc.fetch;
+    try { env.coach.runCoach(); } catch (e) { /* a transport error surfaces to the menu */ }
+    assert.equal(svc.calls.length >= 1, true, 'the valid rows were sent');
+    assert.equal(svc.calls[0].payload.lines.some(l => l.line_id.endsWith('1200')), false, 'the broken row was not');
+    assert.equal(flux.value(ar, 'Status'), 'Not graded: Current (G4) is a spreadsheet error: #DIV/0!');
+    assert.equal(flux.value(ar, 'Feedback'), '');
+    assert.equal(flux.styleAt(ar, 'Status').bg, env.constants.STATUS_STYLES.error.background);
+  });
+}
+
+test('two rows sharing an ID each keep their own cell diagnostics alongside the shared reason', () => {
+  const env = setup();
+  const flux = env.ss.getSheetByName('Flux');
+  const C = env.constants;
+  flux.setValueAt(2, 'Prior', '#REF!');
+  flux.getRange(5, 1, 1, C.FLUX_COLUMNS.length).setValues([C.FLUX_COLUMNS.map(h => ({
+    'Line ID': 'FHD-US|2026-09|MoM|5000', 'Entity': 'FHD-US', 'Period': '2026-09', 'Comparison basis': 'MoM',
+    'Account': '5000 Cloud hosting', 'Prior': 1000, 'Current': '30,00O', 'Variance ($)': 49000, 'Variance (%)': 49,
+    'Commentary': 'Hosting rose because the two rows share one ID.',
+  })[h] ?? '')]);
+  const reply = runResponse();
+  reply.results = reply.results.filter(r => r.line_id !== 'FHD-US|2026-09|MoM|5000');
+  const svc = service({ 'POST /v1/runs': () => json(200, reply), 'POST /v1/runs/*': () => json(200, {}) });
+  env.state.fetch = svc.fetch;
+  env.coach.runCoach();
+  const shared = 'Line ID appears on rows 2, 5: add a slice (entity|period|basis|account|slice) so each row has its own';
+  assert.equal(flux.value(2, 'Status'), 'Not graded: Prior (F2) is a spreadsheet error: #REF!; ' + shared);
+  assert.equal(flux.value(5, 'Status'), 'Not graded: Current (G5) is not a number: 30,00O; ' + shared);
+  assert.match(env.ss.toasts.at(-1), /2 not sent/);
 });
 
 test('RAN marker', () => {

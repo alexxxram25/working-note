@@ -178,9 +178,12 @@ def test_line_numbers_parse_accounting_formats():
     assert LineIn(line_id="x", variance_pct="(4.5%)").variance_pct == pytest.approx(-0.045)
 
 
-@pytest.mark.parametrize("value,expected", [(0.912, 0.912), ("91.2%", 0.912), ("0.6", 0.6), (0.85, 0.85), (0.999, 0.999)])
-def test_thresholds_with_up_to_three_decimals_are_read(value, expected):
-    assert Criterion(id="C1", threshold=value).threshold == pytest.approx(expected)
+@pytest.mark.parametrize("value,expected", [(0.912, 0.912), ("91.2%", 0.912), ("0.6", 0.6), (0.85, 0.85), (0.999, 0.999),
+                                            (0.6000000005, 0.6), (0.9100000000000001, 0.91)])
+def test_thresholds_with_up_to_three_decimals_are_read_as_their_canonical_value(value, expected):
+    # Float noise within tolerance is accepted, and what comes out is the three-decimal
+    # value the calibration fingerprint names, so grading and lookup agree exactly.
+    assert Criterion(id="C1", threshold=value).threshold == expected
 
 
 @pytest.mark.parametrize("value", [0.9125, "0.9125", "91.25%", 0.60001, 1 / 3])

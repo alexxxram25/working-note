@@ -27,6 +27,9 @@ def parse_number(value: Any) -> Optional[float]:
 
     NaN and the infinities are refused, not passed through: JSON parsers accept
     them, a comparison against one is quietly false, and int() of one is a crash.
+
+    Error messages put the offending value after the first ': ', so a handler
+    that must not echo input (api.invalid_request) can keep the reason alone.
     """
     if value is None or isinstance(value, bool):
         return None
@@ -104,7 +107,9 @@ class Criterion(BaseModel):
         # a fourth decimal would grade one way and be looked up as another.
         if abs(number - round(number, 3)) > 1e-9:
             raise ValueError("threshold may have at most three decimals, got {0!r}".format(number))
-        return number
+        # The canonical value, not the one typed: 0.6000000005 is accepted as 0.6 and
+        # must grade as 0.6, since 0.6 is what the calibration fingerprint says it is.
+        return round(number, 3)
 
     @field_validator("active", mode="before")
     @classmethod

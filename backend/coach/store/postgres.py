@@ -35,10 +35,13 @@ except Exception:  # noqa: BLE001
     psycopg = None
 
 
-# db/migrations/0005: cached probabilities before it were rounded to four
-# decimals. Those rows stay (the table is append-only) as generation 1; the
-# service reads and writes generation 2 only.
-JEV_CACHE_GENERATION = 2
+# Which cache rows hold the probability as Jev gave it. Rows before
+# db/migrations/0005 were rounded to four decimals (generation 1). 0005 made 2
+# the column default, so a service built before it wrote rounded values into 2
+# until 0007 put the default back to 1. The service therefore names its
+# generation on every write and reads only a generation that was never a
+# column default: nothing an older service writes can be mistaken for exact.
+JEV_CACHE_GENERATION = 3
 
 
 class PostgresStore(Store):
@@ -182,16 +185,20 @@ class PostgresStore(Store):
         return [dict(r) for r in rows]
 
     # runs and the lease ----------------------------------------------------
+    # Lease times use clock_timestamp(), never now(): now() is the transaction's
+    # start, and a statement that waited on the lease row (the fence below holds
+    # it for the length of a write) would otherwise judge expiry by a clock that
+    # stopped before the wait.
     def acquire_lock(self, sheet_id, run_id, holder, ttl_seconds) -> LockState:
         with self._connect() as conn:
             row = conn.execute(
                 "insert into run_locks (sheet_id, run_id, holder, expires_at)"
-                " values (%s, %s, %s, now() + make_interval(secs => %s))"
+                " values (%s, %s, %s, clock_timestamp() + make_interval(secs => %s))"
                 " on conflict (sheet_id) do update set run_id = excluded.run_id, holder = excluded.holder,"
-                " acquired_at = now(), expires_at = excluded.expires_at"
-                " where run_locks.expires_at < now()"
+                " acquired_at = clock_timestamp(), expires_at = clock_timestamp() + make_interval(secs => %s)"
+                " where run_locks.expires_at < clock_timestamp()"
                 " returning run_id::text as run_id, holder, expires_at",
-                (sheet_id, run_id, holder, ttl_seconds)).fetchone()
+                (sheet_id, run_id, holder, ttl_seconds, ttl_seconds)).fetchone()
             if row is not None:
                 return LockState(True, row["run_id"], row["holder"], row["expires_at"])
             current = conn.execute("select run_id::text as run_id, holder, expires_at from run_locks"
@@ -205,10 +212,28 @@ class PostgresStore(Store):
 
     def renew_lock(self, sheet_id, run_id, ttl_seconds) -> bool:
         with self._connect() as conn:
-            return conn.execute(
-                "update run_locks set expires_at = now() + make_interval(secs => %s)"
-                " where sheet_id = %s and run_id = %s and expires_at > now()",
-                (ttl_seconds, sheet_id, run_id)).rowcount == 1
+            with conn.transaction():
+                held = self._lock_lease_row(conn, sheet_id, run_id)
+                if held is None or not held["live"]:
+                    return False
+                conn.execute(
+                    "update run_locks set expires_at = clock_timestamp() + make_interval(secs => %s)"
+                    " where sheet_id = %s", (ttl_seconds, sheet_id))
+                return True
+
+    @staticmethod
+    def _lock_lease_row(conn, sheet_id, run_id):
+        """Lock the sheet's lease row, then say whether it is this run's and still live.
+
+        Two statements on purpose: the first may wait for another transaction, and
+        the expiry must be judged by the clock after that wait, not before it.
+        """
+        row = conn.execute("select run_id::text as run_id from run_locks where sheet_id = %s for update",
+                           (sheet_id,)).fetchone()
+        if row is None or row["run_id"] != str(run_id):
+            return None
+        return conn.execute("select expires_at > clock_timestamp() as live from run_locks where sheet_id = %s",
+                            (sheet_id,)).fetchone()
 
     def create_run(self, run: Dict[str, Any]) -> None:
         with self._connect() as conn:
@@ -243,10 +268,8 @@ class PostgresStore(Store):
             with conn.transaction():
                 # The fence. Locking the lease row holds off a takeover (acquire_lock's
                 # upsert waits on it) until this transaction commits or rolls back.
-                lease = conn.execute(
-                    "select run_id::text as run_id, expires_at > now() as live from run_locks"
-                    " where sheet_id = %s for update", (sheet_id,)).fetchone()
-                if lease is None or lease["run_id"] != str(run_id) or not lease["live"]:
+                lease = self._lock_lease_row(conn, sheet_id, run_id)
+                if lease is None or not lease["live"]:
                     raise LeaseLost("run {0} no longer holds the write lease for this sheet".format(run_id))
                 for line in lines:
                     conn.execute(

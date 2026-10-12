@@ -295,11 +295,13 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
     async def invalid_request(request: Request, exc: RequestValidationError):
         # FastAPI's default handler echoes the offending input, which here may be
         # commentary text, and fails outright on NaN (not JSON). Report where and
-        # why, never what.
+        # why, never what: the validators put the value after the first ': '
+        # (models.parse_number), and everything from there on is dropped.
         problems = []
         for err in exc.errors():
             loc = [str(p) for p in err.get("loc", ()) if p != "body"]
-            problems.append("{0}: {1}".format(".".join(loc) or "body", err.get("msg", "invalid")))
+            reason = str(err.get("msg", "invalid")).split(": ", 1)[0]
+            problems.append("{0}: {1}".format(".".join(loc) or "body", reason))
         return JSONResponse(status_code=422, content={
             "detail": {"message": "The request could not be read", "problems": problems},
             "request_id": getattr(request.state, "request_id", None)})
@@ -382,11 +384,15 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
             store = services.store
             latest, state = store.criteria_state(body.sheet_id)
             digest, content = criteria_versions.snapshot(criteria)
-            changes = criteria_versions.changes(state, criteria) if digest != latest else []
+            # Compare the criteria themselves, not only the snapshot pointer: a
+            # service from before criteria_current existed advanced the history
+            # without moving the pointer, so the pointer alone can say "unchanged"
+            # while the latest recorded version describes a different tab.
+            changes = criteria_versions.changes(state, criteria)
             changed_by = {cid: (hint or {}).get("by") for cid, hint in body.criteria_edit_hints.items()
                           if (hint or {}).get("by")}
             snapshot_id = None
-            if digest != latest:
+            if digest != latest or changes:
                 snapshot_id = store.record_criteria(body.sheet_id, digest, content, changes, changed_by,
                                                     who.attribution, run_id)
             versions = {cid: v for cid, (v, _) in store.criteria_state(body.sheet_id)[1].items()}

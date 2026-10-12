@@ -267,6 +267,45 @@ def test_the_lease_heartbeat_renews_at_most_every_third_of_the_ttl_and_reports_a
     assert len(renewals) == 3
 
 
+def test_criteria_history_advanced_without_the_pointer_is_reconciled():
+    """The pointer says A, the latest recorded version says B, the tab shows A: version 3 is A."""
+    from coach import criteria_versions
+    from coach.store.base import utcnow
+
+    client, services = make()
+    first = start(client)
+    assert first.status_code == 200
+    complete(client, first.json()["run_id"])
+    store = services.store
+    rows_b = [dict(r) for r in fernhill.criteria_rows()]
+    rows_b[0]["Feedback when failed"] = "B: who or what, specifically?"
+    c1_b = Criterion.from_sheet_row(rows_b[0])
+    store._history.append({  # what a service without criteria_current left behind
+        "sheet_id": SHEET, "criterion_id": "C1", "version": 2, "content": c1_b.sheet_content(),
+        "content_hash": criteria_versions.content_hash(c1_b.sheet_content()),
+        "fields_changed": ["Feedback when failed"], "diff": {}, "calibration_impact": "none",
+        "changed_by": None, "detected_by": "old", "detected_in_run": None, "snapshot_id": 99, "created_at": utcnow()})
+    second = start(client)  # the tab still shows A
+    assert second.status_code == 200, second.text
+    out = second.json()
+    assert {c["criterion_id"]: c["version"] for c in out["criteria_changes"]}["C1"] == 3
+    assert {c["id"]: c["version"] for c in out["criteria_status"]}["C1"] == 3
+    logged = {r["criterion_version"] for r in store.log_rows(SHEET) if r["run_id"] == out["run_id"]
+              and r["criterion_id"] == "C1"}
+    assert logged == {3}
+
+
+def test_body_errors_name_the_field_and_the_reason_but_never_the_value():
+    client, _ = make()
+    body = run_body()
+    body["lines"][0]["prior"] = "30,00O"
+    response = client.post("/v1/runs", json=body, headers=as_preparer())
+    assert response.status_code == 422, response.text
+    problems = response.json()["detail"]["problems"]
+    assert problems == ["lines.0.prior: Value error, not a number"]
+    assert "30,00O" not in response.text
+
+
 def test_a_repeated_line_id_is_rejected_in_every_occurrence_and_never_logged():
     client, services = make()
     body = run_body()
