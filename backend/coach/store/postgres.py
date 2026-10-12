@@ -135,8 +135,10 @@ class PostgresStore(Store):
     # criteria versions -----------------------------------------------------
     def criteria_state(self, sheet_id):
         with self._connect() as conn:
-            snap = conn.execute("select content_hash from criteria_snapshots where sheet_id = %s"
-                                " order by id desc limit 1", (sheet_id,)).fetchone()
+            # criteria_current, not the highest snapshot id: snapshots are deduplicated
+            # by content, so a tab that returns to an earlier state has no new row.
+            snap = conn.execute("select content_hash from criteria_current where sheet_id = %s",
+                                (sheet_id,)).fetchone()
             rows = conn.execute(
                 "select distinct on (criterion_id) criterion_id, version, content from criteria_history"
                 " where sheet_id = %s order by criterion_id, version desc", (sheet_id,)).fetchall()
@@ -155,6 +157,11 @@ class PostgresStore(Store):
                     row = conn.execute("select id from criteria_snapshots where sheet_id = %s and content_hash = %s",
                                        (sheet_id, snapshot_hash)).fetchone()
                 snapshot_id = row["id"]
+                conn.execute(
+                    "insert into criteria_current (sheet_id, snapshot_id, content_hash, updated_in_run)"
+                    " values (%s, %s, %s, %s) on conflict (sheet_id) do update set snapshot_id = excluded.snapshot_id,"
+                    " content_hash = excluded.content_hash, updated_at = now(), updated_in_run = excluded.updated_in_run",
+                    (sheet_id, snapshot_id, snapshot_hash, run_id))
                 for change in changes:
                     conn.execute(
                         "insert into criteria_history (sheet_id, criterion_id, version, content, content_hash,"

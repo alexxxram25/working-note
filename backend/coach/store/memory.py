@@ -31,7 +31,8 @@ class MemoryStore(Store):
         self._settings: Dict[str, Any] = {}
         self._default_criteria: List[Dict[str, Any]] = []
         self._calibrations: List[Tuple[str, str, str]] = []
-        self._snapshots: Dict[str, List[Tuple[int, str]]] = {}
+        self._snapshots: Dict[str, List[Tuple[int, str]]] = {}  # every (id, hash) ever seen, per sheet
+        self._current: Dict[str, Tuple[int, str]] = {}  # the snapshot each sheet's tab is on now
         self._history: List[Dict[str, Any]] = []
         self._locks: Dict[str, Tuple[str, Optional[str], dt.datetime]] = {}
         self._runs: Dict[str, Dict[str, Any]] = {}
@@ -111,8 +112,8 @@ class MemoryStore(Store):
     # criteria versions -----------------------------------------------------
     def criteria_state(self, sheet_id: str) -> Tuple[Optional[str], Dict[str, Tuple[int, Dict[str, str]]]]:
         with self._lock:
-            snapshots = self._snapshots.get(sheet_id) or []
-            latest = snapshots[-1][1] if snapshots else None
+            current = self._current.get(sheet_id)
+            latest = current[1] if current else None
             state: Dict[str, Tuple[int, Dict[str, str]]] = {}
             for row in self._history:
                 if row["sheet_id"] == sheet_id:
@@ -124,11 +125,16 @@ class MemoryStore(Store):
     def record_criteria(self, sheet_id, snapshot_hash, content, changes: Sequence[Change], changed_by,
                         detected_by, run_id) -> Optional[int]:
         with self._lock:
+            current = self._current.get(sheet_id)
+            if current and current[1] == snapshot_hash and not changes:
+                return current[0]
+            # Like the database: one snapshot row per distinct content, however often the tab returns to it.
             snapshots = self._snapshots.setdefault(sheet_id, [])
-            if snapshots and snapshots[-1][1] == snapshot_hash and not changes:
-                return snapshots[-1][0]
-            snapshot_id = self._id()
-            snapshots.append((snapshot_id, snapshot_hash))
+            known = next((sid for sid, digest in snapshots if digest == snapshot_hash), None)
+            snapshot_id = known if known is not None else self._id()
+            if known is None:
+                snapshots.append((snapshot_id, snapshot_hash))
+            self._current[sheet_id] = (snapshot_id, snapshot_hash)
             now = utcnow()
             for change in changes:
                 if any(r["sheet_id"] == sheet_id and r["criterion_id"] == change.criterion_id

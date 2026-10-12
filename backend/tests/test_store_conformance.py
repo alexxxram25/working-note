@@ -267,6 +267,28 @@ def test_criteria_versions(store):
     assert store.criteria_state(SHEET)[1]["C1"][0] == 2
 
 
+def test_criteria_that_go_back_and_forth_are_recorded_where_they_stand(store):
+    """A -> B -> A -> B: after the fourth run the recorded criteria describe B.
+
+    Snapshots are deduplicated by content, so the tab's four states are two
+    snapshot rows. Reading 'current' as the highest snapshot id said B while the
+    sheet showed A on the third run, and then saw no change at all on the fourth.
+    """
+    a = [Criterion(id="C1", passes_when="p", feedback="A", threshold=0.6), Criterion(id="ARITH", feedback="a")]
+    b = [a[0].model_copy(update={"feedback": "B"}), a[1]]
+    for tab in (a, b, a, b):  # what the API does at the start of each run
+        latest, state = store.criteria_state(SHEET)
+        digest, content = criteria_versions.snapshot(tab)
+        if digest != latest:
+            store.record_criteria(SHEET, digest, content, criteria_versions.changes(state, tab), {},
+                                  "r@example.com", str(uuid.uuid4()))
+    latest, state = store.criteria_state(SHEET)
+    assert latest == criteria_versions.snapshot(b)[0], "the current snapshot is the tab as it stands"
+    version, content = state["C1"]
+    assert content["Feedback when failed"] == "B" and version == 4
+    assert [h["version"] for h in store.criteria_history(SHEET) if h["criterion_id"] == "C1"] == [1, 2, 3, 4]
+
+
 def test_overrides_are_idempotent(store):
     row = dict(sheet_id=SHEET, close_period="2026-09", line_id="E|2026-09|MoM|1", kind="missed_issue",
                criterion_id=None, not_covered=True, note="hedging?", submitted_by=None, role="reviewer",
