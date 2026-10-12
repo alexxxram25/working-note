@@ -36,7 +36,9 @@ def record(store, close, rows, attempt=1):
         log.append(dict(close_period=close, line_id="E|{0}|MoM|{1}".format(close, number), attempt_number=attempt,
                         commentary_hash="h{0}-{1}".format(number, attempt), criterion_id=cid, result=result,
                         jev_probability=p, threshold=t))
+    assert store.acquire_lock(SHEET, run_id, "tests", 60).acquired  # writes need the live lease
     store.record_evaluation(SHEET, run_id, [], log, {})
+    store.release_lock(SHEET, run_id)
     return run_id
 
 

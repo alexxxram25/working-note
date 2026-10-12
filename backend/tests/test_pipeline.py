@@ -193,6 +193,12 @@ def test_inactive_criteria_are_neither_asked_nor_logged():
     assert "C2" not in logged and "NEAR" not in logged
 
 
+def test_every_criterion_inactive_is_refused_not_passed():
+    rows = [c.model_copy(update={"active": False}) for c in criteria()]
+    with pytest.raises(pipeline.NoActiveCriteria):
+        run([line(1, "Hosting rose $60K because Orion Freight onboarded.")], FakeJev({}), rows=rows)
+
+
 def test_a_criterion_without_a_pass_condition_is_an_error_for_that_criterion_only():
     jev = FakeJev({})
     rows = criteria(C2={"passes_when": " "})
@@ -203,12 +209,22 @@ def test_a_criterion_without_a_pass_condition_is_an_error_for_that_criterion_onl
 
 
 def test_malformed_and_repeated_line_ids_are_rejected():
-    good = line(1, "Hosting rose $60K because Orion Freight onboarded.")
-    out = run([good, good, LineIn(line_id="no-separators", commentary="x")], FakeJev({}))
-    assert len(out.results) == 1
-    assert {r["error"] for r in out.rejected} == {
-        "Line ID appears more than once in this run",
-        "Line ID needs entity|period|basis|account[|slice], got 1 part(s)"}
+    jev = FakeJev({})
+    twice = line(1, "Hosting rose $60K because Orion Freight onboarded.")
+    again = twice.model_copy(update={"commentary": "Hosting rose $60K because Orion Freight ran a data load.",
+                                     "row": 9})
+    once = line(2, "Payroll rose $60K because Orion Freight hired two engineers.")
+    out = run([twice.model_copy(update={"row": 5}), again, once, LineIn(line_id="no-separators", commentary="x")],
+              jev)
+    # Both occurrences of the repeated ID are rejected: neither is graded, logged or sent to Jev.
+    assert [r.line_id for r in out.results] == [once.line_id]
+    assert [c["commentary"] for c in jev.calls] == [once.commentary]
+    assert {r["line_id"] for r in out.log_rows} == {once.line_id}
+    assert [(r["line_id"], r["row"], r["error"]) for r in out.rejected] == [
+        (twice.line_id, "5", "Line ID appears 2 times in this run (rows 5, 9); none was graded"),
+        (twice.line_id, "9", "Line ID appears 2 times in this run (rows 5, 9); none was graded"),
+        ("no-separators", "", "Line ID needs entity|period|basis|account[|slice], got 1 part(s)"),
+    ]
 
 
 def test_attempt_numbers_follow_the_prior_attempt():
@@ -233,6 +249,90 @@ def test_log_rows_carry_the_spec_columns():
     assert c1["calibration_status"] == "Calibrated" and c1["jev_source"] == "live"
     assert by_id["ARITH"]["question_builder_version"] is None
     assert by_id["ARITH"]["criterion_version"] == 1
+
+
+def test_the_heartbeat_beats_while_jev_answers_are_outstanding_and_can_stop_the_run():
+    beats = []
+    rows = criteria()
+    lines = [line(i, "Hosting rose $60K because Orion Freight onboarded, line {0}.".format(i)) for i in range(3)]
+    config = pipeline.PipelineConfig(criteria=rows, settings=Settings(), calibration=calibrated(rows),
+                                     jev=FakeJev({}), heartbeat=lambda: beats.append(1))
+    pipeline.run(config, lines)
+    assert len(beats) >= 1
+
+    class Lost(RuntimeError):
+        pass
+
+    def lose():
+        raise Lost()
+
+    config = pipeline.PipelineConfig(criteria=rows, settings=Settings(), calibration=calibrated(rows),
+                                     jev=FakeJev({}), heartbeat=lose)
+    with pytest.raises(Lost):
+        pipeline.run(config, lines)
+
+
+def test_the_heartbeat_does_not_wait_for_a_slow_answer():
+    """One slow request must not hold the lease renewal up while the others are done."""
+    import threading
+    import time
+
+    release = threading.Event()
+    slow = "Hosting rose $60K because Orion Freight onboarded, slowly."
+
+    class SlowJev(FakeJev):
+        def evaluate(self, state, questions, session_id=None):
+            if state["commentary"].endswith("slowly."):
+                release.wait(timeout=10)
+            return super().evaluate(state, questions, session_id)
+
+    beats = []
+    rows = criteria()
+    lines = [line(0, slow)] + [line(i, "Hosting rose $60K because Orion Freight onboarded, line {0}.".format(i))
+                               for i in range(1, 4)]
+    config = pipeline.PipelineConfig(criteria=rows, settings=Settings(), calibration=calibrated(rows),
+                                     jev=SlowJev({}), heartbeat=lambda: beats.append(time.monotonic()),
+                                     heartbeat_every=0.02)
+    out = {}
+    runner = threading.Thread(target=lambda: out.setdefault("result", pipeline.run(config, lines)))
+    runner.start()
+    deadline = time.monotonic() + 5
+    while len(beats) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    beats_before_release = len(beats)
+    release.set()
+    runner.join(timeout=10)
+    assert beats_before_release >= 3, "the heartbeat kept beating while the first answer was outstanding"
+    graded = out["result"].results
+    assert len(graded) == 4 and all(r.status != "error" for r in graded), "every line still got its answer"
+
+
+def test_a_lost_lease_cancels_the_jev_work_still_queued():
+    import time
+
+    class Lost(RuntimeError):
+        pass
+
+    class SlowJev(FakeJev):
+        def evaluate(self, state, questions, session_id=None):
+            time.sleep(0.05)
+            return super().evaluate(state, questions, session_id)
+
+    beats = []
+
+    def lose_on_second_beat():
+        beats.append(1)
+        if len(beats) == 2:
+            raise Lost()
+
+    rows = criteria()
+    jev = SlowJev({})
+    lines = [line(i, "Hosting rose $60K because Orion Freight onboarded, line {0}.".format(i)) for i in range(8)]
+    config = pipeline.PipelineConfig(criteria=rows, settings=Settings(), calibration=calibrated(rows), jev=jev,
+                                     jev_concurrency=1, heartbeat=lose_on_second_beat, heartbeat_every=0.01)
+    with pytest.raises(Lost):
+        pipeline.run(config, lines)
+    assert len(jev.calls) <= 2, "the requests not yet started were cancelled, not run and discarded"
 
 
 def test_one_request_per_line_with_every_jev_question():

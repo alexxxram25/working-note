@@ -47,6 +47,11 @@ def utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+class LeaseLost(RuntimeError):
+    """The run's write lease is not the live one for its sheet: it expired, was
+    released, or another run took it over. Nothing was written."""
+
+
 class Store(ABC):
     kind = "abstract"
 
@@ -108,6 +113,10 @@ class Store(ABC):
     def release_lock(self, sheet_id: str, run_id: str) -> bool: ...
 
     @abstractmethod
+    def renew_lock(self, sheet_id: str, run_id: str, ttl_seconds: int) -> bool:
+        """Push the expiry out, only if this run still holds a live lease. False if it does not."""
+
+    @abstractmethod
     def create_run(self, run: Dict[str, Any]) -> None: ...
 
     @abstractmethod
@@ -120,7 +129,12 @@ class Store(ABC):
     @abstractmethod
     def record_evaluation(self, sheet_id: str, run_id: str, lines: Sequence[LineIn],
                           log_rows: Sequence[Dict[str, Any]], counts: Dict[str, int]) -> None:
-        """Lines, commentary versions, Log rows and run counts, all or nothing."""
+        """Lines, commentary versions, Log rows and run counts, all or nothing.
+
+        Writes only while `run_id` holds the sheet's live lease, checked inside the
+        same transaction; otherwise raises LeaseLost and writes nothing. A run whose
+        lease lapsed may have been superseded by one that already graded newer text.
+        """
 
     # reads -----------------------------------------------------------------
     @abstractmethod

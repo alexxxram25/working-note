@@ -25,7 +25,7 @@ from ..hashing import commentary_hash, sha256_hex
 from ..jev.client import JevAnswer
 from ..jev.replay import CachedAnswer
 from ..models import LineIn
-from .base import LOG_FIELDS, LockState, SheetKey, Store, TeamMember, utcnow
+from .base import LOG_FIELDS, LeaseLost, LockState, SheetKey, Store, TeamMember, utcnow
 
 try:  # pragma: no cover - import guard
     import psycopg
@@ -33,6 +33,15 @@ try:  # pragma: no cover - import guard
     from psycopg.types.json import Jsonb
 except Exception:  # noqa: BLE001
     psycopg = None
+
+
+# Which cache rows hold the probability as Jev gave it. Rows before
+# db/migrations/0005 were rounded to four decimals (generation 1). 0005 made 2
+# the column default, so a service built before it wrote rounded values into 2
+# until 0007 put the default back to 1. The service therefore names its
+# generation on every write and reads only a generation that was never a
+# column default: nothing an older service writes can be mistaken for exact.
+JEV_CACHE_GENERATION = 3
 
 
 class PostgresStore(Store):
@@ -129,8 +138,10 @@ class PostgresStore(Store):
     # criteria versions -----------------------------------------------------
     def criteria_state(self, sheet_id):
         with self._connect() as conn:
-            snap = conn.execute("select content_hash from criteria_snapshots where sheet_id = %s"
-                                " order by id desc limit 1", (sheet_id,)).fetchone()
+            # criteria_current, not the highest snapshot id: snapshots are deduplicated
+            # by content, so a tab that returns to an earlier state has no new row.
+            snap = conn.execute("select content_hash from criteria_current where sheet_id = %s",
+                                (sheet_id,)).fetchone()
             rows = conn.execute(
                 "select distinct on (criterion_id) criterion_id, version, content from criteria_history"
                 " where sheet_id = %s order by criterion_id, version desc", (sheet_id,)).fetchall()
@@ -149,6 +160,11 @@ class PostgresStore(Store):
                     row = conn.execute("select id from criteria_snapshots where sheet_id = %s and content_hash = %s",
                                        (sheet_id, snapshot_hash)).fetchone()
                 snapshot_id = row["id"]
+                conn.execute(
+                    "insert into criteria_current (sheet_id, snapshot_id, content_hash, updated_in_run)"
+                    " values (%s, %s, %s, %s) on conflict (sheet_id) do update set snapshot_id = excluded.snapshot_id,"
+                    " content_hash = excluded.content_hash, updated_at = now(), updated_in_run = excluded.updated_in_run",
+                    (sheet_id, snapshot_id, snapshot_hash, run_id))
                 for change in changes:
                     conn.execute(
                         "insert into criteria_history (sheet_id, criterion_id, version, content, content_hash,"
@@ -169,16 +185,20 @@ class PostgresStore(Store):
         return [dict(r) for r in rows]
 
     # runs and the lease ----------------------------------------------------
+    # Lease times use clock_timestamp(), never now(): now() is the transaction's
+    # start, and a statement that waited on the lease row (the fence below holds
+    # it for the length of a write) would otherwise judge expiry by a clock that
+    # stopped before the wait.
     def acquire_lock(self, sheet_id, run_id, holder, ttl_seconds) -> LockState:
         with self._connect() as conn:
             row = conn.execute(
                 "insert into run_locks (sheet_id, run_id, holder, expires_at)"
-                " values (%s, %s, %s, now() + make_interval(secs => %s))"
+                " values (%s, %s, %s, clock_timestamp() + make_interval(secs => %s))"
                 " on conflict (sheet_id) do update set run_id = excluded.run_id, holder = excluded.holder,"
-                " acquired_at = now(), expires_at = excluded.expires_at"
-                " where run_locks.expires_at < now()"
+                " acquired_at = clock_timestamp(), expires_at = clock_timestamp() + make_interval(secs => %s)"
+                " where run_locks.expires_at < clock_timestamp()"
                 " returning run_id::text as run_id, holder, expires_at",
-                (sheet_id, run_id, holder, ttl_seconds)).fetchone()
+                (sheet_id, run_id, holder, ttl_seconds, ttl_seconds)).fetchone()
             if row is not None:
                 return LockState(True, row["run_id"], row["holder"], row["expires_at"])
             current = conn.execute("select run_id::text as run_id, holder, expires_at from run_locks"
@@ -189,6 +209,31 @@ class PostgresStore(Store):
         with self._connect() as conn:
             return conn.execute("delete from run_locks where sheet_id = %s and run_id = %s",
                                 (sheet_id, run_id)).rowcount == 1
+
+    def renew_lock(self, sheet_id, run_id, ttl_seconds) -> bool:
+        with self._connect() as conn:
+            with conn.transaction():
+                held = self._lock_lease_row(conn, sheet_id, run_id)
+                if held is None or not held["live"]:
+                    return False
+                conn.execute(
+                    "update run_locks set expires_at = clock_timestamp() + make_interval(secs => %s)"
+                    " where sheet_id = %s", (ttl_seconds, sheet_id))
+                return True
+
+    @staticmethod
+    def _lock_lease_row(conn, sheet_id, run_id):
+        """Lock the sheet's lease row, then say whether it is this run's and still live.
+
+        Two statements on purpose: the first may wait for another transaction, and
+        the expiry must be judged by the clock after that wait, not before it.
+        """
+        row = conn.execute("select run_id::text as run_id from run_locks where sheet_id = %s for update",
+                           (sheet_id,)).fetchone()
+        if row is None or row["run_id"] != str(run_id):
+            return None
+        return conn.execute("select expires_at > clock_timestamp() as live from run_locks where sheet_id = %s",
+                            (sheet_id,)).fetchone()
 
     def create_run(self, run: Dict[str, Any]) -> None:
         with self._connect() as conn:
@@ -221,6 +266,11 @@ class PostgresStore(Store):
     def record_evaluation(self, sheet_id, run_id, lines: Sequence[LineIn], log_rows, counts) -> None:
         with self._connect() as conn:
             with conn.transaction():
+                # The fence. Locking the lease row holds off a takeover (acquire_lock's
+                # upsert waits on it) until this transaction commits or rolls back.
+                lease = self._lock_lease_row(conn, sheet_id, run_id)
+                if lease is None or not lease["live"]:
+                    raise LeaseLost("run {0} no longer holds the write lease for this sheet".format(run_id))
                 for line in lines:
                     conn.execute(
                         "insert into lines (sheet_id, line_id, entity, close_period, comparison_basis, account,"
@@ -329,19 +379,23 @@ class PostgresStore(Store):
     # Jev cache -------------------------------------------------------------
     def jev_cache_get(self, fingerprint):
         with self._connect() as conn:
-            row = conn.execute("select probability, model_snapshot from jev_responses where fingerprint = %s",
-                               (fingerprint,)).fetchone()
+            row = conn.execute(
+                "select probability, model_snapshot from jev_responses"
+                " where fingerprint = %s and precision_generation = %s",
+                (fingerprint, JEV_CACHE_GENERATION)).fetchone()
         return CachedAnswer(float(row["probability"]), row["model_snapshot"]) if row else None
 
     def jev_cache_put(self, fingerprint, question_id, answer: JevAnswer, usage, source="live") -> None:
         tokens = usage.get("input_tokens") if isinstance(usage.get("input_tokens"), int) else None
         cost = usage.get("cost")
         with self._connect() as conn:
+            # The probability goes in as received: a cached rerun must grade exactly as the live run did.
             conn.execute(
-                "insert into jev_responses (fingerprint, model_snapshot, question_id, probability, source,"
-                " input_tokens, cost_usd) values (%s, %s, %s, %s, %s, %s, %s) on conflict do nothing",
-                (fingerprint, answer.model, question_id, round(answer.probability, 4), source, tokens,
-                 cost if isinstance(cost, (int, float)) else None))
+                "insert into jev_responses (fingerprint, precision_generation, model_snapshot, question_id,"
+                " probability, source, input_tokens, cost_usd) values (%s, %s, %s, %s, %s, %s, %s, %s)"
+                " on conflict do nothing",
+                (fingerprint, JEV_CACHE_GENERATION, answer.model, question_id, float(answer.probability), source,
+                 tokens, cost if isinstance(cost, (int, float)) else None))
 
     # health ----------------------------------------------------------------
     def save_health(self, sheet_id, health_run_id, rows, generated_by) -> None:

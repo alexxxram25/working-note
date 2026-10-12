@@ -18,8 +18,9 @@ from coach import criteria_versions
 from coach.attempts import PriorAttempt
 from coach.hashing import commentary_hash
 from coach.jev.client import JevAnswer
+from coach.jev.thresholds import grade
 from coach.models import Criterion, LineIn
-from coach.store.base import SheetKey
+from coach.store.base import LeaseLost, SheetKey
 from coach.store.memory import MemoryStore
 from conftest import ROOT
 
@@ -63,8 +64,14 @@ def store(request):
         drop()
 
 
-def new_run(store, sheet=SHEET, **extra):
+def new_run(store, sheet=SHEET, lease=True, **extra):
+    """A running run that holds the sheet's write lease, as the API arranges before it evaluates."""
     run_id = str(uuid.uuid4())
+    if lease:
+        held = store.acquire_lock(sheet, run_id, "tests", 600)
+        if not held.acquired:  # the previous test run on this sheet never completed; take over
+            store.release_lock(sheet, held.run_id)
+            assert store.acquire_lock(sheet, run_id, "tests", 600).acquired
     store.create_run(dict(run_id=run_id, sheet_id=sheet, role="preparer", auth_method="local",
                           attribution_verified=False, settings={}, question_builder_version="qb-1.0.0",
                           model_pin="jev-1.13.0", jev_mode="replay", **extra))
@@ -139,6 +146,60 @@ def test_concurrent_acquire_has_exactly_one_winner(store):
     assert len(winners) == 1
 
 
+def test_evaluation_writes_only_under_the_live_lease(store):
+    lid = "E|2026-09|MoM|5000"
+    rows = [log(lid, 1, commentary_hash("draft"), "C1", "fail")]
+
+    # No lease at all: the run never took one, or it was released.
+    orphan = new_run(store, lease=False)
+    with pytest.raises(LeaseLost):
+        store.record_evaluation(SHEET, orphan, [line(lid, "draft")], rows, {"lines_evaluated": 1})
+
+    # Another run holds the lease: this run was superseded.
+    holder = new_run(store)
+    with pytest.raises(LeaseLost):
+        store.record_evaluation(SHEET, orphan, [line(lid, "draft")], rows, {"lines_evaluated": 1})
+
+    # The lease was this run's, but it lapsed.
+    store.release_lock(SHEET, holder)
+    lapsed = str(uuid.uuid4())
+    assert store.acquire_lock(SHEET, lapsed, "tests", 0).acquired
+    store.create_run(dict(run_id=lapsed, sheet_id=SHEET, role="preparer", auth_method="local",
+                          attribution_verified=False, settings={}, question_builder_version="qb-1.0.0",
+                          model_pin="jev-1.13.0", jev_mode="replay"))
+    import time
+    time.sleep(0.05)
+    with pytest.raises(LeaseLost):
+        store.record_evaluation(SHEET, lapsed, [line(lid, "draft")], rows, {"lines_evaluated": 1})
+
+    # Nothing from any of them reached the Log, the lines or the run counts.
+    assert store.log_rows(SHEET) == [] and store.prior_attempts(SHEET, [lid]) == {}
+    assert store.get_run(orphan)["lines_evaluated"] == 0 and store.get_run(lapsed)["lines_evaluated"] == 0
+
+    # The live holder writes.
+    live = new_run(store)
+    store.record_evaluation(SHEET, live, [line(lid, "draft")], rows, {"lines_evaluated": 1})
+    assert [r["run_id"] for r in store.log_rows(SHEET)] == [live]
+
+
+def test_renew_lock_extends_only_a_live_lease_of_its_holder(store):
+    run_id = str(uuid.uuid4())
+    first = store.acquire_lock(SHEET, run_id, "a@example.com", 60)
+    assert store.renew_lock(SHEET, str(uuid.uuid4()), 600) is False, "not the holder"
+    assert store.renew_lock(SHEET, run_id, 600) is True
+    renewed = store.acquire_lock(SHEET, str(uuid.uuid4()), "b@example.com", 60)
+    assert not renewed.acquired and renewed.run_id == run_id
+    assert renewed.expires_at > first.expires_at, "the expiry moved out"
+    store.release_lock(SHEET, run_id)
+    assert store.renew_lock(SHEET, run_id, 600) is False, "released"
+    import time
+    stale = str(uuid.uuid4())
+    assert store.acquire_lock(SHEET, stale, "a@example.com", 0).acquired
+    time.sleep(0.05)
+    assert store.renew_lock(SHEET, stale, 600) is False, "a lapsed lease cannot be revived"
+    assert store.acquire_lock(SHEET, str(uuid.uuid4()), "b@example.com", 60).acquired
+
+
 def test_evaluation_round_trip_and_prior_attempts(store):
     run1 = new_run(store)
     store.record_evaluation(SHEET, run1, [line("E|2026-09|MoM|5000", "draft")], [
@@ -206,6 +267,28 @@ def test_criteria_versions(store):
     assert store.criteria_state(SHEET)[1]["C1"][0] == 2
 
 
+def test_criteria_that_go_back_and_forth_are_recorded_where_they_stand(store):
+    """A -> B -> A -> B: after the fourth run the recorded criteria describe B.
+
+    Snapshots are deduplicated by content, so the tab's four states are two
+    snapshot rows. Reading 'current' as the highest snapshot id said B while the
+    sheet showed A on the third run, and then saw no change at all on the fourth.
+    """
+    a = [Criterion(id="C1", passes_when="p", feedback="A", threshold=0.6), Criterion(id="ARITH", feedback="a")]
+    b = [a[0].model_copy(update={"feedback": "B"}), a[1]]
+    for tab in (a, b, a, b):  # what the API does at the start of each run
+        latest, state = store.criteria_state(SHEET)
+        digest, content = criteria_versions.snapshot(tab)
+        if digest != latest:
+            store.record_criteria(SHEET, digest, content, criteria_versions.changes(state, tab), {},
+                                  "r@example.com", str(uuid.uuid4()))
+    latest, state = store.criteria_state(SHEET)
+    assert latest == criteria_versions.snapshot(b)[0], "the current snapshot is the tab as it stands"
+    version, content = state["C1"]
+    assert content["Feedback when failed"] == "B" and version == 4
+    assert [h["version"] for h in store.criteria_history(SHEET) if h["criterion_id"] == "C1"] == [1, 2, 3, 4]
+
+
 def test_overrides_are_idempotent(store):
     row = dict(sheet_id=SHEET, close_period="2026-09", line_id="E|2026-09|MoM|1", kind="missed_issue",
                criterion_id=None, not_covered=True, note="hedging?", submitted_by=None, role="reviewer",
@@ -224,6 +307,18 @@ def test_jev_cache(store):
     assert cached.probability == pytest.approx(0.42) and cached.model == "typesafe/jev-1.13-20260917"
     store.jev_cache_put("q:1", "C1", JevAnswer(0.99, "other", "live"), {})  # first answer wins
     assert store.jev_cache_get("q:1").probability == pytest.approx(0.42)
+
+
+def test_a_cached_answer_grades_exactly_as_the_live_one_did(store):
+    # 0.89996 against a threshold of 0.900 is a fail. Rounded to four decimals on
+    # the way into the cache it read 0.9000, and the rerun of the same text passed.
+    live = 0.89996
+    store.jev_cache_put("q:edge", "C1", JevAnswer(live, "typesafe/jev-1.13-20260917", "live"), {})
+    cached = store.jev_cache_get("q:edge").probability
+    assert cached == live, "the cache must hand back the float it was given, not a rounding of it"
+    assert grade(live, 0.9, True).result == grade(cached, 0.9, True).result == "fail"
+    store.jev_cache_put("q:long", "C1", JevAnswer(0.123456789012345, "typesafe/jev-1.13-20260917", "live"), {})
+    assert store.jev_cache_get("q:long").probability == 0.123456789012345
 
 
 def test_health_rows_and_resolution(store):

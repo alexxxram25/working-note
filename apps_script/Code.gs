@@ -135,9 +135,19 @@ function runCoach_(options) {
     let table = readTable_(flux, FLUX_COLUMNS);
     const assigned = assignLineIds_(flux, table);
     if (assigned.length) table = readTable_(flux, FLUX_COLUMNS);
-    const lines = table.rows.filter(r => String(r.values['Line ID'] || '').trim()).map(lineFromRow_);
-    if (!lines.length) {
+    const read = readLines_(table);
+    const lines = read.lines;
+    const problems = read.problems;
+    if (!lines.length && !problems.length) {
       alert_('There are no lines in the Flux tab to check.');
+      return null;
+    }
+    // Rows that cannot be sent are marked now, before the service is called, so a
+    // run that fails (a 422, a 503, a dropped connection) cannot leave them showing
+    // the Passed and the feedback of some earlier run.
+    writeResults_(flux, table, [], {}, [], problems);
+    if (!lines.length) {
+      alert_('Run Coach: no line could be checked.\n- ' + problems.map(p => p.error).join('\n- '));
       return null;
     }
     const sent = {};
@@ -161,7 +171,7 @@ function runCoach_(options) {
     // while the run was in flight. A line whose commentary changed meanwhile
     // gets no feedback, because the feedback would be about text that is gone.
     const current = readTable_(flux, FLUX_COLUMNS);
-    const outcome = writeResults_(flux, current, body.results, sent, body.rejected || []);
+    const outcome = writeResults_(flux, current, body.results, sent, body.rejected || [], []);
     written = outcome.written;
     stale = outcome.stale;
 
@@ -171,7 +181,7 @@ function runCoach_(options) {
     }
     if (cachedRole_() === 'reviewer') writeCalibrationStatus_(body.criteria_status || []);
     refreshOverrideValidation_();
-    if (!options.quiet) toast_(summaryText_(body.summary, stale.length));
+    if (!options.quiet) toast_(summaryText_(body.summary, stale.length, problems.length));
     return body.summary || {};
   } finally {
     if (runId) {
@@ -188,29 +198,66 @@ function runCoach_(options) {
   }
 }
 
-function lineFromRow_(row) {
-  const v = row.values;
-  return {
-    line_id: String(v['Line ID']).trim(),
-    entity: String(v['Entity'] || ''),
-    period: periodText_(v['Period']),
-    basis: String(v['Comparison basis'] || ''),
-    account: String(v['Account'] || ''),
-    prior: numberOrNull_(v['Prior']),
-    current: numberOrNull_(v['Current']),
-    variance_usd: numberOrNull_(v['Variance ($)']),
-    variance_pct: numberOrNull_(v['Variance (%)']),
-    commentary: v['Commentary'] === null || v['Commentary'] === undefined ? '' : String(v['Commentary']),
-    row: row.rowIndex,
-  };
+// The lines to send, and the rows that cannot be sent. A row is a problem when
+// a number cell holds something that is not a number (a #DIV/0!, a typo like
+// "30,00O"); sending it as blank would let the service derive a variance the
+// sheet never showed. A problem names the cell, so the fix is one click away.
+function readLines_(table) {
+  const lines = [];
+  const problems = [];
+  table.rows.filter(r => String(r.values['Line ID'] || '').trim()).forEach(row => {
+    const v = row.values;
+    const line = {
+      line_id: String(v['Line ID']).trim(),
+      entity: String(v['Entity'] || ''),
+      period: periodText_(v['Period']),
+      basis: String(v['Comparison basis'] || ''),
+      account: String(v['Account'] || ''),
+      commentary: v['Commentary'] === null || v['Commentary'] === undefined ? '' : String(v['Commentary']),
+      row: row.rowIndex,
+    };
+    const errors = [];
+    [['prior', 'Prior'], ['current', 'Current'], ['variance_usd', 'Variance ($)'], ['variance_pct', 'Variance (%)']]
+      .forEach(([key, header]) => {
+        try {
+          line[key] = numberOrNull_(v[header]);
+        } catch (e) {
+          line[key] = null;
+          errors.push(header + ' (' + cellA1_(row.rowIndex, table.columns[header]) + ') ' + e.message);
+        }
+      });
+    if (errors.length) problems.push({ line_id: line.line_id, row: row.rowIndex, error: errors.join('; ') });
+    else lines.push(line);
+  });
+  // A Line ID on two rows is two rows with one identity: the service would file
+  // one row's verdict under the other's text. Neither is sent; both say why, and a
+  // row that also has a broken cell is told about both.
+  const rowsById = {};
+  lines.concat(problems).forEach(l => { (rowsById[l.line_id] = rowsById[l.line_id] || []).push(l.row); });
+  const duplicateReason = id => 'Line ID appears on rows ' + rowsById[id].slice().sort((a, b) => a - b).join(', ') +
+    ': add a slice (entity|period|basis|account|slice) so each row has its own';
+  problems.forEach(p => { if (rowsById[p.line_id].length > 1) p.error += '; ' + duplicateReason(p.line_id); });
+  const kept = [];
+  lines.forEach(line => {
+    if (rowsById[line.line_id].length === 1) kept.push(line);
+    else problems.push({ line_id: line.line_id, row: line.row, error: duplicateReason(line.line_id) });
+  });
+  return { lines: kept, problems: problems };
 }
 
-function writeResults_(sheet, table, results, sent, rejected) {
+// results and rejected come from the service and attach by Line ID (the sheet may
+// have been re-sorted while the run was in flight). problems were found in this
+// script a moment ago, before anything was sent, and attach by row: each names
+// its own cells, so two rows sharing an ID keep their own diagnostics.
+function writeResults_(sheet, table, results, sent, rejected, problems) {
   const col = table.columns;
   const byId = {};
+  const rowsById = {};
   table.rows.forEach(r => {
     const id = String(r.values['Line ID'] || '').trim();
-    if (id) byId[id] = r;
+    if (!id) return;
+    byId[id] = r;
+    (rowsById[id] = rowsById[id] || []).push(r);
   });
   const updates = [];
   const written = [];
@@ -235,10 +282,16 @@ function writeResults_(sheet, table, results, sent, rejected) {
       style: STATUS_STYLES[result.status] || STATUS_STYLES.error,
     });
   });
+  // A rejected Line ID marks every row that carries it: when the rejection is
+  // "this ID appears twice", one of the two rows left blank would read as graded.
   rejected.forEach(item => {
-    const row = byId[item.line_id];
-    if (!row) return;
-    updates.push({ row: row.rowIndex, status: 'Not graded: ' + item.error, failed: '', feedback: '', note: '',
+    (rowsById[item.line_id] || []).forEach(row => {
+      updates.push({ row: row.rowIndex, status: 'Not graded: ' + item.error, failed: '', feedback: '', note: '',
+        style: STATUS_STYLES.error });
+    });
+  });
+  (problems || []).forEach(item => {
+    updates.push({ row: item.row, status: 'Not graded: ' + item.error, failed: '', feedback: '', note: '',
       style: STATUS_STYLES.error });
   });
   if (updates.length) {
@@ -282,7 +335,7 @@ function statusText_(result) {
     ? ' (attempt ' + attempt + ')' : '');
 }
 
-function summaryText_(summary, staleCount) {
+function summaryText_(summary, staleCount, problemCount) {
   if (!summary) return 'Coach run finished.';
   const parts = [
     summary.passed + ' passed',
@@ -292,6 +345,7 @@ function summaryText_(summary, staleCount) {
   if (summary.needs_commentary) parts.push(summary.needs_commentary + ' need commentary');
   if (summary.reviewer_prompt) parts.push(summary.reviewer_prompt + ' with a reviewer prompt');
   if (summary.errors) parts.push(summary.errors + ' not graded');
+  if (problemCount) parts.push(problemCount + ' not sent (see Status for the cell to fix)');
   if (staleCount) parts.push(staleCount + ' changed during the run (rerun Coach)');
   return parts.join(', ') + '.';
 }
@@ -1052,14 +1106,37 @@ function periodText_(value) {
   return String(value === null || value === undefined ? '' : value).trim();
 }
 
+// A blank cell (or n/a) is "not given" and comes back null. Anything else must
+// read as a finite number, the same way backend/coach/models.py reads it:
+// "$25,000", "(1,200)", "4.5%". A spreadsheet error (#DIV/0!, #REF!) or a typo
+// ("30,00O") throws, with the offending text, instead of passing as blank.
 function numberOrNull_(value) {
   if (value === '' || value === null || value === undefined) return null;
-  if (typeof value === 'number') return value;
-  const text = String(value).replace(/[$,\s]/g, '');
-  if (/^\(.*\)$/.test(text)) return -Number(text.slice(1, -1));
-  const n = Number(text.replace(/%$/, ''));
-  if (isNaN(n)) return null;
-  return /%$/.test(text) ? n / 100 : n;
+  if (typeof value === 'number') {
+    if (!isFinite(value)) throw new Error('is not a finite number: ' + value);
+    return value;
+  }
+  const raw = String(value).trim();
+  if (!raw || /^(n\/a|na|-|none)$/i.test(raw)) return null;
+  if (raw.charAt(0) === '#') throw new Error('is a spreadsheet error: ' + raw);
+  const text = raw.replace(/[$,\s]/g, '');
+  const negative = /^\(.*\)$/.test(text);
+  const body = negative ? text.slice(1, -1) : text;
+  const percent = /%$/.test(body);
+  const digits = body.replace(/%$/, '');
+  const n = Number(digits);
+  if (digits === '' || !isFinite(n)) throw new Error('is not a number: ' + raw);
+  const magnitude = percent ? n / 100 : n;
+  return negative ? -magnitude : magnitude;
+}
+
+// "G7" for row 7 of column 7: the address a person types into the Name box.
+function cellA1_(row, col) {
+  let letters = '';
+  for (let n = col; n > 0; n = Math.floor((n - 1) / 26)) {
+    letters = String.fromCharCode(65 + ((n - 1) % 26)) + letters;
+  }
+  return letters + row;
 }
 
 function isActive_(value) {

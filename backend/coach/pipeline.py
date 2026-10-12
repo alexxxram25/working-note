@@ -20,9 +20,9 @@ log rows it returns, inside the run lock.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from . import feedback
 from .attempts import PriorAttempt, next_attempt
@@ -36,6 +36,10 @@ from .line_ids import LineIdError, parse_line_id
 from .models import COMMENTARY_ID, MATERIALITY_ID, CheckOutcome, Criterion, LineIn, LineResult, Settings
 
 
+class NoActiveCriteria(ValueError):
+    """Every criterion is inactive. A run with nothing to check is refused, not passed."""
+
+
 @dataclass
 class PipelineConfig:
     criteria: List[Criterion]
@@ -45,6 +49,13 @@ class PipelineConfig:
     criteria_versions: Dict[str, int] = field(default_factory=dict)
     jev_concurrency: int = 8
     session_id: Optional[str] = None
+    # Called at least every heartbeat_every seconds while Jev answers are
+    # outstanding, whether or not any arrived: the API renews the write lease
+    # here, so a long run does not outlive the lease it took at the start, and
+    # a slow answer cannot hold the renewal up. Raising from it abandons the
+    # run and cancels the Jev work not yet started.
+    heartbeat: Optional[Callable[[], None]] = None
+    heartbeat_every: float = 1.0
 
 
 @dataclass
@@ -95,24 +106,31 @@ def run(config: PipelineConfig, lines: Sequence[LineIn],
     prior_attempts = prior_attempts or {}
     settings = config.settings
     active = [c for c in config.criteria if c.active]
+    if not active:
+        raise NoActiveCriteria("no active criteria: nothing would be checked, so no line can be graded")
     by_id = {c.id: c for c in active}
     jev_criteria = [c for c in active if c.kind == "jev"]
     version = config.criteria_versions.get
 
     items: List[_Line] = []
     rejected: List[Dict[str, str]] = []
-    seen = set()
+    # A Line ID that appears twice is rejected in every occurrence, before any
+    # check runs. Grading the first and dropping the rest would attach one row's
+    # verdict to another row's text, and the Log would carry it under that ID.
+    rows_by_id: Dict[str, List[str]] = {}
+    for line in lines:
+        rows_by_id.setdefault(line.line_id, []).append(str(line.row or "?"))
     for line in lines:
         try:
             parts = parse_line_id(line.line_id)
         except LineIdError as exc:
             rejected.append({"line_id": line.line_id, "row": str(line.row or ""), "error": str(exc)})
             continue
-        if line.line_id in seen:
+        if len(rows_by_id[line.line_id]) > 1:
             rejected.append({"line_id": line.line_id, "row": str(line.row or ""),
-                             "error": "Line ID appears more than once in this run"})
+                             "error": "Line ID appears {0} times in this run (rows {1}); none was graded".format(
+                                 len(rows_by_id[line.line_id]), ", ".join(rows_by_id[line.line_id]))})
             continue
-        seen.add(line.line_id)
         item = _Line(line=line, period=parts.period)
         try:
             item.variance = variance_of(line.prior, line.current, line.variance_usd, line.variance_pct)
@@ -197,13 +215,22 @@ def run(config: PipelineConfig, lines: Sequence[LineIn],
 
     responses: Dict[str, Any] = {}
     if to_jev and askable:
-        with ThreadPoolExecutor(max_workers=max(1, config.jev_concurrency)) as pool:
-            futures = {item.line.line_id: pool.submit(ask, item) for item in to_jev}
-            for line_id, future in futures.items():
-                try:
-                    responses[line_id] = future.result()
-                except JevError as exc:
-                    responses[line_id] = exc
+        pool = ThreadPoolExecutor(max_workers=max(1, config.jev_concurrency))
+        try:
+            futures = {pool.submit(ask, item): item.line.line_id for item in to_jev}
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=config.heartbeat_every, return_when=FIRST_COMPLETED)
+                for future in done:
+                    try:
+                        responses[futures[future]] = future.result()
+                    except JevError as exc:
+                        responses[futures[future]] = exc
+                if config.heartbeat is not None:
+                    config.heartbeat()
+        finally:
+            # On the way out of a failed run, nothing queued is worth asking.
+            pool.shutdown(wait=True, cancel_futures=True)
 
     jev_requests = 0
     for item in to_jev:

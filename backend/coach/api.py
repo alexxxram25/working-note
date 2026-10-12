@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
@@ -43,7 +44,7 @@ from .jev.thresholds import CALIBRATED, UNCALIBRATED, CalibrationIndex
 from .line_ids import LineIdError, parse_line_id
 from .models import Criterion, LineIn, Settings
 from .seed import seed_defaults, settings_rows
-from .store.base import Store, StoreJevCache
+from .store.base import LeaseLost, Store, StoreJevCache
 from .store.memory import MemoryStore
 
 log = logging.getLogger("coach")
@@ -180,7 +181,7 @@ class HealthRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _criteria(rows: List[Dict[str, Any]]) -> List[Criterion]:
+def _criteria(rows: List[Dict[str, Any]], require_active: bool = False) -> List[Criterion]:
     out: List[Criterion] = []
     problems = []
     for index, row in enumerate(rows, start=2):
@@ -198,6 +199,12 @@ def _criteria(rows: List[Dict[str, Any]]) -> List[Criterion]:
         raise HTTPException(422, detail={"message": "Fix the Criteria tab", "problems": problems})
     if not out:
         raise HTTPException(422, detail={"message": "The Criteria tab has no criteria", "problems": []})
+    if require_active and not any(c.active for c in out):
+        # Every check switched off would grade every line "Passed" having checked nothing.
+        raise HTTPException(422, detail={
+            "message": "The Criteria tab has no active criteria",
+            "problems": ["Every criterion is marked N in Active (Y/N), so nothing would be checked. "
+                         "Set at least one criterion to Y."]})
     return out
 
 
@@ -284,6 +291,21 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
         }))
         return response
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, exc: RequestValidationError):
+        # FastAPI's default handler echoes the offending input, which here may be
+        # commentary text, and fails outright on NaN (not JSON). Report where and
+        # why, never what: the validators put the value after the first ': '
+        # (models.parse_number), and everything from there on is dropped.
+        problems = []
+        for err in exc.errors():
+            loc = [str(p) for p in err.get("loc", ()) if p != "body"]
+            reason = str(err.get("msg", "invalid")).split(": ", 1)[0]
+            problems.append("{0}: {1}".format(".".join(loc) or "body", reason))
+        return JSONResponse(status_code=422, content={
+            "detail": {"message": "The request could not be read", "problems": problems},
+            "request_id": getattr(request.state, "request_id", None)})
+
     @app.exception_handler(AuthError)
     async def auth_error(request: Request, exc: AuthError):
         return JSONResponse(status_code=exc.status, content={
@@ -341,7 +363,7 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
 
     def do_run(body: RunRequest, who: Identity):
         require_sheet(who, body.sheet_id)
-        criteria = _criteria(body.criteria)
+        criteria = _criteria(body.criteria, require_active=True)
         settings = _settings(body.settings, services.store)
         if settings.pinned_model_version != config.jev_pinned_version:
             raise HTTPException(409, detail=(
@@ -362,11 +384,15 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
             store = services.store
             latest, state = store.criteria_state(body.sheet_id)
             digest, content = criteria_versions.snapshot(criteria)
-            changes = criteria_versions.changes(state, criteria) if digest != latest else []
+            # Compare the criteria themselves, not only the snapshot pointer: a
+            # service from before criteria_current existed advanced the history
+            # without moving the pointer, so the pointer alone can say "unchanged"
+            # while the latest recorded version describes a different tab.
+            changes = criteria_versions.changes(state, criteria)
             changed_by = {cid: (hint or {}).get("by") for cid, hint in body.criteria_edit_hints.items()
                           if (hint or {}).get("by")}
             snapshot_id = None
-            if digest != latest:
+            if digest != latest or changes:
                 snapshot_id = store.record_criteria(body.sheet_id, digest, content, changes, changed_by,
                                                     who.attribution, run_id)
             versions = {cid: v for cid, (v, _) in store.criteria_state(body.sheet_id)[1].items()}
@@ -392,6 +418,7 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
             output = pipeline.run(pipeline.PipelineConfig(
                 criteria=criteria, settings=settings, calibration=calibration, jev=services.jev,
                 criteria_versions=versions, jev_concurrency=config.jev_concurrency, session_id=run_id,
+                heartbeat=_lease_heartbeat(store, body.sheet_id, run_id, config.lock_ttl_seconds),
             ), body.lines, prior)
             rejected_ids = {r["line_id"] for r in output.rejected}
             evaluated = [l for l in body.lines if l.line_id not in rejected_ids]
@@ -400,6 +427,18 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
                 "lines_evaluated": sum(1 for r in output.results if r.material),
                 "jev_requests": output.jev_requests,
             })
+        except LeaseLost:
+            # The lease lapsed or was taken over while this run was evaluating. Its
+            # results describe text another run may since have graded: discard them.
+            if created:
+                try:
+                    services.store.finish_run(run_id, "failed", error="LeaseLost")
+                except Exception:  # noqa: BLE001
+                    log.exception("could not mark run %s failed", run_id)
+            services.store.release_lock(body.sheet_id, run_id)
+            raise HTTPException(409, detail=(
+                "This run took longer than its write lease and another run may have started since; its "
+                "results were discarded and nothing was written. Run Coach again."))
         except Exception as exc:
             if created:
                 try:
@@ -532,6 +571,26 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
         return response
 
     return app
+
+
+def _lease_heartbeat(store: Store, sheet_id: str, run_id: str, ttl_seconds: int):
+    """Renew the write lease as Jev answers arrive, at most every third of its TTL.
+
+    Renewal is one UPDATE, so it is cheap; and a lease that can no longer be
+    renewed is a lease lost, reported now rather than after every line was graded.
+    """
+    interval = max(1.0, ttl_seconds / 3.0)
+    last = [time.monotonic()]
+
+    def beat() -> None:
+        now = time.monotonic()
+        if now - last[0] < interval:
+            return
+        last[0] = now
+        if not store.renew_lock(sheet_id, run_id, ttl_seconds):
+            raise LeaseLost("run {0} could not renew the write lease for this sheet".format(run_id))
+
+    return beat
 
 
 def _iso(value: Any) -> Any:

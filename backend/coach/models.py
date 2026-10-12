@@ -7,6 +7,7 @@ threshold must be a probability; a materiality % must be a fraction once read).
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, ClassVar, Dict, List, Optional
 
@@ -22,25 +23,40 @@ _NUMBER_JUNK = re.compile(r"[,$\s]")
 
 
 def parse_number(value: Any) -> Optional[float]:
-    """Spreadsheet numbers: '', None and 'n/a' are missing; '(1,200)' is negative."""
+    """Spreadsheet numbers: '', None and 'n/a' are missing; '(1,200)' is negative.
+
+    NaN and the infinities are refused, not passed through: JSON parsers accept
+    them, a comparison against one is quietly false, and int() of one is a crash.
+
+    Error messages put the offending value after the first ': ', so a handler
+    that must not echo input (api.invalid_request) can keep the reason alone.
+    """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip()
-    if not text or text.lower() in ("n/a", "na", "-", "none"):
-        return None
-    negative = text.startswith("(") and text.endswith(")")
-    text = _NUMBER_JUNK.sub("", text.strip("()"))
-    percent = text.endswith("%")
-    text = text.rstrip("%")
-    try:
-        number = float(text)
-    except ValueError:
-        raise ValueError("not a number: {0!r}".format(value))
-    if percent:
-        number /= 100.0
-    return -number if negative else number
+        try:
+            number = float(value)
+        except OverflowError:  # an int too large for a float; pydantic only converts ValueError
+            raise ValueError("not a finite number: {0!r}".format(value))
+    else:
+        text = str(value).strip()
+        if not text or text.lower() in ("n/a", "na", "-", "none"):
+            return None
+        negative = text.startswith("(") and text.endswith(")")
+        text = _NUMBER_JUNK.sub("", text.strip("()"))
+        percent = text.endswith("%")
+        text = text.rstrip("%")
+        try:
+            number = float(text)
+        except ValueError:
+            raise ValueError("not a number: {0!r}".format(value))
+        if percent:
+            number /= 100.0
+        if negative:
+            number = -number
+    if not math.isfinite(number):
+        raise ValueError("not a finite number: {0!r}".format(value))
+    return number
 
 
 def parse_flag(value: Any) -> bool:
@@ -87,7 +103,13 @@ class Criterion(BaseModel):
             return None
         if not 0.0 < number < 1.0:
             raise ValueError("threshold must be between 0 and 1, got {0}".format(number))
-        return number
+        # A calibration is identified by the threshold to three decimals (jev/questions.py);
+        # a fourth decimal would grade one way and be looked up as another.
+        if abs(number - round(number, 3)) > 1e-9:
+            raise ValueError("threshold may have at most three decimals, got {0!r}".format(number))
+        # The canonical value, not the one typed: 0.6000000005 is accepted as 0.6 and
+        # must grade as 0.6, since 0.6 is what the calibration fingerprint says it is.
+        return round(number, 3)
 
     @field_validator("active", mode="before")
     @classmethod
@@ -176,6 +198,8 @@ class Settings(BaseModel):
                      "health_missed_min", "health_reviewer_weight", "health_preparer_weight")
     @classmethod
     def _non_negative(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("must be a finite number")
         if value < 0:
             raise ValueError("must not be negative")
         return value

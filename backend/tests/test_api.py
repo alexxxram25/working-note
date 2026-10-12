@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -171,8 +173,166 @@ def test_bad_criteria_and_settings_are_422_with_reasons():
     assert response.status_code == 422
     problems = response.json()["detail"]["problems"]
     assert any("Criteria row 2" in p for p in problems) or any("more than once" in p for p in problems)
+    rows = [dict(r) for r in fernhill.criteria_rows()]
+    rows[0]["Threshold"] = 0.9125
+    response = start(client, criteria=rows)
+    assert response.status_code == 422
+    assert any("Criteria row 2" in p and "at most three decimals" in p for p in response.json()["detail"]["problems"])
     bad_settings = [{"Setting": "Minimum sample size", "Value": "lots"}]
     assert start(client, settings=bad_settings).status_code == 422
+
+
+def test_nonfinite_numbers_are_422_not_500():
+    client, _ = make()
+    # JSON parsers accept NaN and Infinity tokens; the service must not.
+    body = run_body()
+    body["lines"][0]["prior"] = float("nan")
+    response = client.post("/v1/runs", content=json.dumps(body), headers=dict(as_preparer(),
+                                                                                **{"Content-Type": "application/json"}))
+    assert response.status_code == 422, response.text
+    assert "finite" in response.text
+    infinite = [{"Setting": "Minimum sample size", "Value": "Infinity"}]
+    response = start(client, settings=infinite)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["message"] == "Fix the Settings tab"
+    # An integer literal too large for a float parses as an int; float() of it is an
+    # OverflowError, which pydantic does not turn into a validation error on its own.
+    body = run_body()
+    body["lines"][0]["prior"] = 10 ** 400
+    response = client.post("/v1/runs", json=body, headers=as_preparer())
+    assert response.status_code == 422, response.text
+    assert "finite" in response.text
+    huge = [{"Setting": "Minimum sample size", "Value": 10 ** 400}]
+    assert start(client, settings=huge).status_code == 422
+
+
+def test_results_of_a_run_whose_lease_was_taken_over_are_discarded():
+    from coach.store.base import utcnow
+    import datetime as dt
+    import uuid
+
+    client, services = make()
+    store = services.store
+    intruder = str(uuid.uuid4())
+
+    class Stealing(FakeJev):
+        def evaluate(self, state, questions, session_id=None):
+            if not self.calls:
+                # The lease lapses mid-run and another run takes the sheet.
+                run_id, holder, _ = store._locks[SHEET]
+                store._locks[SHEET] = (run_id, holder, utcnow() - dt.timedelta(seconds=1))
+                assert store.acquire_lock(SHEET, intruder, "intruder@example.com", 60).acquired
+            return super().evaluate(state, questions, session_id)
+
+    services.jev = Stealing()
+    response = start(client)
+    assert response.status_code == 409, response.text
+    assert "discarded" in response.json()["detail"]
+    assert store.log_rows(SHEET) == [], "nothing from the superseded run reached the Log"
+    runs = [r for r in store._runs.values() if r["sheet_id"] == SHEET]
+    assert len(runs) == 1 and runs[0]["status"] == "failed" and runs[0]["error"] == "LeaseLost"
+    # The intruder's lease is untouched: the loser did not free a lease it did not hold.
+    assert not store.acquire_lock(SHEET, str(uuid.uuid4()), "x@example.com", 60).acquired
+    assert store.release_lock(SHEET, intruder)
+    services.jev = FakeJev()
+    assert start(client).status_code == 200
+
+
+def test_the_lease_heartbeat_renews_at_most_every_third_of_the_ttl_and_reports_a_lost_lease(monkeypatch):
+    from coach.api import _lease_heartbeat
+    from coach.store.base import LeaseLost
+    from coach import api as api_module
+
+    clock = [1000.0]
+    monkeypatch.setattr(api_module.time, "monotonic", lambda: clock[0])
+    renewals = []
+
+    class Renewing:
+        def renew_lock(self, sheet_id, run_id, ttl):
+            renewals.append((sheet_id, run_id, ttl))
+            return len(renewals) < 3
+
+    beat = _lease_heartbeat(Renewing(), "s", "r", 180)
+    for _ in range(5):
+        beat()
+    assert renewals == [], "nothing to renew within the first third of the TTL"
+    clock[0] += 61
+    beat()
+    assert renewals == [("s", "r", 180)]
+    clock[0] += 61
+    beat()
+    clock[0] += 61
+    with pytest.raises(LeaseLost):
+        beat()
+    assert len(renewals) == 3
+
+
+def test_criteria_history_advanced_without_the_pointer_is_reconciled():
+    """The pointer says A, the latest recorded version says B, the tab shows A: version 3 is A."""
+    from coach import criteria_versions
+    from coach.store.base import utcnow
+
+    client, services = make()
+    first = start(client)
+    assert first.status_code == 200
+    complete(client, first.json()["run_id"])
+    store = services.store
+    rows_b = [dict(r) for r in fernhill.criteria_rows()]
+    rows_b[0]["Feedback when failed"] = "B: who or what, specifically?"
+    c1_b = Criterion.from_sheet_row(rows_b[0])
+    store._history.append({  # what a service without criteria_current left behind
+        "sheet_id": SHEET, "criterion_id": "C1", "version": 2, "content": c1_b.sheet_content(),
+        "content_hash": criteria_versions.content_hash(c1_b.sheet_content()),
+        "fields_changed": ["Feedback when failed"], "diff": {}, "calibration_impact": "none",
+        "changed_by": None, "detected_by": "old", "detected_in_run": None, "snapshot_id": 99, "created_at": utcnow()})
+    second = start(client)  # the tab still shows A
+    assert second.status_code == 200, second.text
+    out = second.json()
+    assert {c["criterion_id"]: c["version"] for c in out["criteria_changes"]}["C1"] == 3
+    assert {c["id"]: c["version"] for c in out["criteria_status"]}["C1"] == 3
+    logged = {r["criterion_version"] for r in store.log_rows(SHEET) if r["run_id"] == out["run_id"]
+              and r["criterion_id"] == "C1"}
+    assert logged == {3}
+
+
+def test_body_errors_name_the_field_and_the_reason_but_never_the_value():
+    client, _ = make()
+    body = run_body()
+    body["lines"][0]["prior"] = "30,00O"
+    response = client.post("/v1/runs", json=body, headers=as_preparer())
+    assert response.status_code == 422, response.text
+    problems = response.json()["detail"]["problems"]
+    assert problems == ["lines.0.prior: Value error, not a number"]
+    assert "30,00O" not in response.text
+
+
+def test_a_repeated_line_id_is_rejected_in_every_occurrence_and_never_logged():
+    client, services = make()
+    body = run_body()
+    hosting = next(l for l in body["lines"] if l["line_id"] == HOSTING)
+    body["lines"].append(dict(hosting, commentary="Hosting rose because of something else entirely.", row=99))
+    response = client.post("/v1/runs", json=body, headers=as_preparer())
+    assert response.status_code == 200, response.text
+    out = response.json()
+    assert [r["line_id"] for r in out["rejected"]] == [HOSTING, HOSTING]
+    assert all("appears 2 times" in r["error"] for r in out["rejected"])
+    assert not any(r["line_id"] == HOSTING for r in out["results"])
+    assert out["summary"]["rejected"] == 2 and out["summary"]["lines"] == len(body["lines"]) - 2
+    assert not any(r["line_id"] == HOSTING for r in services.store.log_rows(SHEET))
+    assert services.store.prior_attempts(SHEET, [HOSTING]) == {}
+
+
+def test_a_run_with_every_criterion_switched_off_is_refused_not_passed():
+    client, services = make()
+    rows = [dict(r, **{"Active (Y/N)": "N"}) for r in fernhill.criteria_rows()]
+    response = start(client, criteria=rows)
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["message"] == "The Criteria tab has no active criteria"
+    assert any("Set at least one criterion to Y" in p for p in detail["problems"])
+    assert services.store.log_rows(SHEET) == []
+    # The lease was never taken: the next run starts at once.
+    assert start(client).status_code == 200
 
 
 def test_criteria_edits_are_versioned_with_their_calibration_impact():

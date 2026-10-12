@@ -53,6 +53,7 @@ TABLES = [
     "team_roles", "sheet_keys", "settings", "lines", "line_commentary",
     "criteria_snapshots", "criteria_history", "calibrations", "runs",
     "run_locks", "log", "overrides", "jev_responses", "criteria_health",
+    "criteria_current",
 ]
 APPEND_ONLY = [
     "log", "overrides", "jev_responses", "line_commentary",
