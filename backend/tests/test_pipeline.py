@@ -193,6 +193,12 @@ def test_inactive_criteria_are_neither_asked_nor_logged():
     assert "C2" not in logged and "NEAR" not in logged
 
 
+def test_every_criterion_inactive_is_refused_not_passed():
+    rows = [c.model_copy(update={"active": False}) for c in criteria()]
+    with pytest.raises(pipeline.NoActiveCriteria):
+        run([line(1, "Hosting rose $60K because Orion Freight onboarded.")], FakeJev({}), rows=rows)
+
+
 def test_a_criterion_without_a_pass_condition_is_an_error_for_that_criterion_only():
     jev = FakeJev({})
     rows = criteria(C2={"passes_when": " "})

@@ -175,6 +175,19 @@ def test_bad_criteria_and_settings_are_422_with_reasons():
     assert start(client, settings=bad_settings).status_code == 422
 
 
+def test_a_run_with_every_criterion_switched_off_is_refused_not_passed():
+    client, services = make()
+    rows = [dict(r, **{"Active (Y/N)": "N"}) for r in fernhill.criteria_rows()]
+    response = start(client, criteria=rows)
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["message"] == "The Criteria tab has no active criteria"
+    assert any("Set at least one criterion to Y" in p for p in detail["problems"])
+    assert services.store.log_rows(SHEET) == []
+    # The lease was never taken: the next run starts at once.
+    assert start(client).status_code == 200
+
+
 def test_criteria_edits_are_versioned_with_their_calibration_impact():
     client, _ = make()
     first = start(client).json()

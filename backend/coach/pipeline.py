@@ -36,6 +36,10 @@ from .line_ids import LineIdError, parse_line_id
 from .models import COMMENTARY_ID, MATERIALITY_ID, CheckOutcome, Criterion, LineIn, LineResult, Settings
 
 
+class NoActiveCriteria(ValueError):
+    """Every criterion is inactive. A run with nothing to check is refused, not passed."""
+
+
 @dataclass
 class PipelineConfig:
     criteria: List[Criterion]
@@ -95,6 +99,8 @@ def run(config: PipelineConfig, lines: Sequence[LineIn],
     prior_attempts = prior_attempts or {}
     settings = config.settings
     active = [c for c in config.criteria if c.active]
+    if not active:
+        raise NoActiveCriteria("no active criteria: nothing would be checked, so no line can be graded")
     by_id = {c.id: c for c in active}
     jev_criteria = [c for c in active if c.kind == "jev"]
     version = config.criteria_versions.get

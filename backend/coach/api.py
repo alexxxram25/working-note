@@ -180,7 +180,7 @@ class HealthRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _criteria(rows: List[Dict[str, Any]]) -> List[Criterion]:
+def _criteria(rows: List[Dict[str, Any]], require_active: bool = False) -> List[Criterion]:
     out: List[Criterion] = []
     problems = []
     for index, row in enumerate(rows, start=2):
@@ -198,6 +198,12 @@ def _criteria(rows: List[Dict[str, Any]]) -> List[Criterion]:
         raise HTTPException(422, detail={"message": "Fix the Criteria tab", "problems": problems})
     if not out:
         raise HTTPException(422, detail={"message": "The Criteria tab has no criteria", "problems": []})
+    if require_active and not any(c.active for c in out):
+        # Every check switched off would grade every line "Passed" having checked nothing.
+        raise HTTPException(422, detail={
+            "message": "The Criteria tab has no active criteria",
+            "problems": ["Every criterion is marked N in Active (Y/N), so nothing would be checked. "
+                         "Set at least one criterion to Y."]})
     return out
 
 
@@ -341,7 +347,7 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
 
     def do_run(body: RunRequest, who: Identity):
         require_sheet(who, body.sheet_id)
-        criteria = _criteria(body.criteria)
+        criteria = _criteria(body.criteria, require_active=True)
         settings = _settings(body.settings, services.store)
         if settings.pinned_model_version != config.jev_pinned_version:
             raise HTTPException(409, detail=(
