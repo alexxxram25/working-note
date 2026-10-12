@@ -1,0 +1,25 @@
+# Secrets. env.example is the committed template; .env never is.
+.env
+.env.*
+backend/.env
+
+# Local tooling
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+node_modules/
+
+# Throwaway local Postgres cluster (make db-up)
+.pgdata/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+.pytest_e2e_server.log

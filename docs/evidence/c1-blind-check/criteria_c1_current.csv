@@ -1,0 +1,2 @@
+ID,Criterion,Passes when,Feedback when failed,Why it matters,Example of good,Owner,Last reviewed,Threshold,Calibration status,Active (Y/N)
+C1,Names a specific driver,"Points to a vendor, contract, hire, customer, or event, not a category like ""timing"" or ""growth""","Name the specific vendor, contract, hire, customer, or event that drove this movement.",A category can't be checked; a driver can,Up $65K: Bluewater Health's one-time backfill ran on our Stratus Compute account (invoice SC-0731).,Controller,2026-09-08,0.91,Calibrated,Y

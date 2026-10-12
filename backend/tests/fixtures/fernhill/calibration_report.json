@@ -1,0 +1,208 @@
+{
+  "criteria": [
+    {
+      "criterion_id": "C1",
+      "fingerprint": "cal:c02747324419a5d0715acbe703689c9fc546c5d6f9248a89582ae6e1d74d3080",
+      "metrics": {
+        "calibration": {
+          "accuracy": 1.0,
+          "balanced_accuracy": 1.0,
+          "brier": 0.0212,
+          "fail_precision": 1.0,
+          "fail_recall": 1.0,
+          "n": 84,
+          "n_fail": 18,
+          "n_pass": 66
+        },
+        "holdout": {
+          "accuracy": 1.0,
+          "balanced_accuracy": 1.0,
+          "brier": 0.0313,
+          "fail_precision": 1.0,
+          "fail_recall": 1.0,
+          "n": 28,
+          "n_fail": 6,
+          "n_pass": 22
+        }
+      },
+      "model_snapshot": "typesafe/jev-1.13-20260917",
+      "passes_when_hash": "sha256:49de3962b582f6b5936bbf62460a97be0822ae4e3883500bc6e0ec544dca3d47",
+      "question_builder_version": "qb-1.1.0",
+      "reason": "held-out balanced accuracy 1.00 on 28 lines",
+      "status": "Calibrated",
+      "threshold": 0.43
+    },
+    {
+      "criterion_id": "C2",
+      "fingerprint": "cal:bf2e65577cbf9c2ff52d8ade38acbe7ecfdfefabc82ead13940e3a8297173c8e",
+      "metrics": {
+        "calibration": {
+          "accuracy": 0.9286,
+          "balanced_accuracy": 0.9589,
+          "brier": 0.0422,
+          "fail_precision": 0.6471,
+          "fail_recall": 1.0,
+          "n": 84,
+          "n_fail": 11,
+          "n_pass": 73
+        },
+        "holdout": {
+          "accuracy": 1.0,
+          "balanced_accuracy": 1.0,
+          "brier": 0.043,
+          "fail_precision": 1.0,
+          "fail_recall": 1.0,
+          "n": 28,
+          "n_fail": 4,
+          "n_pass": 24
+        }
+      },
+      "model_snapshot": "typesafe/jev-1.13-20260917",
+      "passes_when_hash": "sha256:1050143c5329ffaed8ead48211da458ecc52a5b07252308caa906092bcb07d72",
+      "question_builder_version": "qb-1.1.0",
+      "reason": "held-out balanced accuracy 1.00 on 28 lines",
+      "status": "Calibrated",
+      "threshold": 0.84
+    },
+    {
+      "criterion_id": "C3",
+      "fingerprint": "cal:1284a453f2d2a53775a95e7d3f086ff3bb3342408ce99c9f53f0d14e256ba16e",
+      "metrics": {
+        "calibration": {
+          "accuracy": 1.0,
+          "balanced_accuracy": 1.0,
+          "brier": 0.0685,
+          "fail_precision": 1.0,
+          "fail_recall": 1.0,
+          "n": 84,
+          "n_fail": 20,
+          "n_pass": 64
+        },
+        "holdout": {
+          "accuracy": 0.9643,
+          "balanced_accuracy": 0.9762,
+          "brier": 0.0579,
+          "fail_precision": 0.875,
+          "fail_recall": 1.0,
+          "n": 28,
+          "n_fail": 7,
+          "n_pass": 21
+        }
+      },
+      "model_snapshot": "typesafe/jev-1.13-20260917",
+      "passes_when_hash": "sha256:5f31dc70fb288332f864cbd9cdf21aae30ca28d5ba7ef3df61fd884c046e6f66",
+      "question_builder_version": "qb-1.1.0",
+      "reason": "held-out balanced accuracy 0.98 on 28 lines",
+      "status": "Calibrated",
+      "threshold": 0.15
+    },
+    {
+      "criterion_id": "C4",
+      "fingerprint": "cal:d4170f25ffd8989fbb6e9298024c650330f9e3c5bba498a343c99e80ec9bf926",
+      "metrics": {
+        "calibration": {
+          "accuracy": 0.9881,
+          "balanced_accuracy": 0.9923,
+          "brier": 0.0289,
+          "fail_precision": 0.95,
+          "fail_recall": 1.0,
+          "n": 84,
+          "n_fail": 19,
+          "n_pass": 65
+        },
+        "holdout": {
+          "accuracy": 0.8929,
+          "balanced_accuracy": 0.9318,
+          "brier": 0.0217,
+          "fail_precision": 0.6667,
+          "fail_recall": 1.0,
+          "n": 28,
+          "n_fail": 6,
+          "n_pass": 22
+        }
+      },
+      "model_snapshot": "typesafe/jev-1.13-20260917",
+      "passes_when_hash": "sha256:daefdab7376d0dab2cf6235e5fab8b9265e42e48b058750b75f5208532404254",
+      "question_builder_version": "qb-1.1.0",
+      "reason": "held-out balanced accuracy 0.93 on 28 lines",
+      "status": "Calibrated",
+      "threshold": 0.74
+    },
+    {
+      "criterion_id": "C5",
+      "fingerprint": "cal:37da0ca68e6c01ec93c68b23dfdb57b96d106c8781a71b6de73a93cb03beba2d",
+      "metrics": {
+        "calibration": {
+          "accuracy": 0.9286,
+          "balanced_accuracy": 0.9538,
+          "brier": 0.0937,
+          "fail_precision": 0.76,
+          "fail_recall": 1.0,
+          "n": 84,
+          "n_fail": 19,
+          "n_pass": 65
+        },
+        "holdout": {
+          "accuracy": 0.9643,
+          "balanced_accuracy": 0.9773,
+          "brier": 0.0462,
+          "fail_precision": 0.8571,
+          "fail_recall": 1.0,
+          "n": 28,
+          "n_fail": 6,
+          "n_pass": 22
+        }
+      },
+      "model_snapshot": "typesafe/jev-1.13-20260917",
+      "passes_when_hash": "sha256:cd2861b56ffed00b3e4e04fe81093d8e121517a9c2dd56ac14f1c8d971f66752",
+      "question_builder_version": "qb-1.1.0",
+      "reason": "held-out balanced accuracy 0.98 on 28 lines",
+      "status": "Calibrated",
+      "threshold": 0.36
+    },
+    {
+      "criterion_id": "RESTATE",
+      "fingerprint": "cal:5b2ded9dc5dfa6ab8fb926d7bcc5f5a154567e88e2c85944491e690836c6d5b0",
+      "metrics": {
+        "calibration": {
+          "accuracy": 0.9286,
+          "balanced_accuracy": 0.961,
+          "brier": 0.0254,
+          "fail_precision": 0.5385,
+          "fail_recall": 1.0,
+          "n": 84,
+          "n_fail": 7,
+          "n_pass": 77
+        },
+        "holdout": {
+          "accuracy": 0.8929,
+          "balanced_accuracy": 0.9423,
+          "brier": 0.043,
+          "fail_precision": 0.4,
+          "fail_recall": 1.0,
+          "n": 28,
+          "n_fail": 2,
+          "n_pass": 26
+        }
+      },
+      "model_snapshot": "typesafe/jev-1.13-20260917",
+      "passes_when_hash": "sha256:4dbaf6ca3ea3a0c71c39ae5cdd8d37689532cdef94f7ade5953715c2ed7ba80f",
+      "question_builder_version": "qb-1.1.0",
+      "reason": "held-out balanced accuracy 0.94 on 28 lines",
+      "status": "Calibrated",
+      "threshold": 0.85
+    }
+  ],
+  "floors": {
+    "min_balanced_accuracy": 0.75,
+    "min_holdout_per_class": 2
+  },
+  "holdout_fraction": 0.25,
+  "label_source": "synthetic",
+  "labeled_set_hash": "sha256:0e8d9c75cf43d19058c433744141574bb3ee67f383d94695e89f73f3517231c7",
+  "labeled_texts": 112,
+  "model_snapshot": "typesafe/jev-1.13-20260917",
+  "question_builder_version": "qb-1.1.0",
+  "request_model": "typesafe/jev-1.13-20260917",
+  "seed": "flux-coach-2026"
+}

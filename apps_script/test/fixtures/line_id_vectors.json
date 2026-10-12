@@ -1,0 +1,19 @@
+{
+  "_comment": "Shared by backend/tests/test_line_ids.py and apps_script/test/unit.test.mjs so the Python and Apps Script Line ID builders cannot drift apart.",
+  "build": [
+    {"entity": "FHD-US", "period": "2026-09", "basis": "MoM", "account": "5000 Cloud hosting", "slice": null, "expected": "FHD-US|2026-09|MoM|5000"},
+    {"entity": "FHD-US", "period": "2026-09", "basis": "MoM", "account": "6000 Engineering salaries (Platform)", "slice": "PLAT", "expected": "FHD-US|2026-09|MoM|6000|PLAT"},
+    {"entity": " FHD-UK ", "period": "2026-08", "basis": "MoM", "account": "  6360   Travel and entertainment", "slice": "", "expected": "FHD-UK|2026-08|MoM|6360"},
+    {"entity": "ACME", "period": "2026-Q3", "basis": "vs Budget", "account": "Cloud hosting", "slice": null, "expected": "ACME|2026-Q3|vs Budget|CLOUD-HOSTING"},
+    {"entity": "ACME", "period": "2026-09", "basis": "YoY", "account": "G&A salaries", "slice": null, "expected": "ACME|2026-09|YoY|G-A-SALARIES"},
+    {"entity": "ACME", "period": "2026-09", "basis": "MoM", "account": "4000.10 Subscription revenue", "slice": null, "expected": "ACME|2026-09|MoM|4000.10"},
+    {"entity": "ACME", "period": "2026-09", "basis": "MoM", "account": "1200- Accounts receivable", "slice": null, "expected": "ACME|2026-09|MoM|1200"}
+  ],
+  "invalid_build": [
+    {"entity": "", "period": "2026-09", "basis": "MoM", "account": "5000 Cloud hosting", "slice": null},
+    {"entity": "FHD|US", "period": "2026-09", "basis": "MoM", "account": "5000 Cloud hosting", "slice": null},
+    {"entity": "FHD-US", "period": "2026-09", "basis": "MoM", "account": "   ", "slice": null},
+    {"entity": "FHD-US", "period": "2026-09", "basis": "MoM", "account": "!!!", "slice": null}
+  ],
+  "invalid_parse": ["", "FHD-US|2026-09|MoM", "FHD-US|2026-09|MoM|5000|PLAT|extra", " FHD-US|2026-09|MoM|5000", "FHD-US||MoM|5000", "FHD-US|2026-09| MoM|5000"]
+}

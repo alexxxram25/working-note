@@ -1,0 +1,6 @@
+# The image needs two things; everything else stays out, secrets included.
+*
+!backend/requirements.lock
+!backend/coach/
+**/__pycache__
+**/*.pyc

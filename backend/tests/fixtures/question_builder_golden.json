@@ -1,0 +1,22 @@
+{
+  "_comment": "What qb-1.1.0 sends to Jev. If a change to coach/jev/questions.py alters this, bump QUESTION_BUILDER_VERSION and regenerate: calibrations measured on the old questions no longer apply.",
+  "version": "qb-1.1.0",
+  "question": {
+    "type": "noul",
+    "instructions": "Read `commentary`, which a preparer wrote to explain the change shown in `row`. Does the commentary meet the standard described in the criteria? Apply the standard strictly, as a careful reviewer would: generic or implied content does not satisfy a standard that asks for something specific. Judge only what the commentary says, not whether it is true.",
+    "criteria": {
+      "true": "Points to a vendor, contract, hire, customer, or event, not a category like \"timing\" or \"growth\"",
+      "false": "The commentary does not meet this standard, or meets it only vaguely or in part."
+    }
+  },
+  "state": {
+    "row": {
+      "account": "5000 Cloud hosting",
+      "comparison": "month over month",
+      "prior": "$409,000",
+      "current": "$457,500",
+      "change": "+$48,500 (+11.9%)"
+    },
+    "commentary": "Hosting rose $48.5K because a large customer onboarded."
+  }
+}

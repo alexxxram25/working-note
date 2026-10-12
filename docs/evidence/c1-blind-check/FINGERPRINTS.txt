@@ -1,0 +1,3 @@
+3d83d175a8fc188608dbb2af2e489621ece381f1ca5029fa33af1ff0921a1d2e  PREREGISTRATION.md
+aabca217bd281d9b3c4e948fb47f6f97cf588e9f67352e0c5701bc6e26dcc4ef  blind_labels.csv
+fixed at 2026-10-11T19:03:54Z, before any scoring

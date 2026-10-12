@@ -1,0 +1,17 @@
+close_period,line_id,override,note,role,email
+2026-07,FHD-US|2026-07|MoM|6510,Flag was wrong: C2,This does say what changed in the business.,reviewer,reviewer@example.com
+2026-07,FHD-US|2026-07|MoM|6510,Flag was wrong: RESTATE,This adds more than the row's numbers.,reviewer,reviewer@example.com
+2026-07,FHD-US|2026-07|MoM|7100,Flag was wrong: C2,This does say what changed in the business.,reviewer,reviewer@example.com
+2026-08,FHD-US|2026-08|MoM|1400,Flag was wrong: C4,That schedule is something I can pull.,reviewer,reviewer@example.com
+2026-08,FHD-US|2026-08|MoM|6260,Flag was wrong: C4,That schedule is something I can pull.,reviewer,reviewer@example.com
+2026-08,FHD-US|2026-08|MoM|7100,Flag was wrong: C2,This does say what changed in the business.,reviewer,reviewer@example.com
+2026-08,FHD-US|2026-08|MoM|7100,Missed an issue: not covered,Doesn't say whether this exposure is hedged.,reviewer,reviewer@example.com
+2026-09,FHD-UK|2026-09|MoM|6360,Flag was wrong: C5,"One driver explains the whole variance, so it is sized.",reviewer,reviewer@example.com
+2026-09,FHD-US|2026-09|MoM|1400,Flag was wrong: C4,The prepaid roll-forward is on the close checklist; anyone can pull it.,preparer,preparer@example.com
+2026-09,FHD-US|2026-09|MoM|1400,Flag was wrong: C4,That schedule is something I can pull.,reviewer,reviewer@example.com
+2026-09,FHD-US|2026-09|MoM|2100,Missed an issue: not covered,Tie the accrual to the Q4 forecast.,reviewer,reviewer@example.com
+2026-09,FHD-US|2026-09|MoM|2400,Flag was wrong: C4,That schedule is something I can pull.,reviewer,reviewer@example.com
+2026-09,FHD-US|2026-09|MoM|6500,Flag was wrong: C5,"One driver explains the whole variance, so it is sized.",reviewer,reviewer@example.com
+2026-09,FHD-US|2026-09|MoM|7000,Flag was wrong: C5,"One driver explains the whole variance, so it is sized.",reviewer,reviewer@example.com
+2026-09,FHD-US|2026-09|MoM|7100,Flag was wrong: C3,It says whether this repeats.,reviewer,reviewer@example.com
+2026-09,FHD-US|2026-09|MoM|7100,Missed an issue: not covered,Hedging again: say whether we hedge the GBP payable.,reviewer,reviewer@example.com

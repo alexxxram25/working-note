@@ -1,0 +1,7 @@
+{
+  "scriptId": "REPLACE_WITH_YOUR_SCRIPT_ID",
+  "rootDir": ".",
+  "fileExtension": "gs",
+  "filePushOrder": ["Code.gs"],
+  "skipSubdirectories": true
+}

@@ -1,0 +1,18 @@
+Setting,Value,Notes
+Materiality ($),25000,A line is skipped when its $ variance is under this AND its % variance is under Materiality (%). Equal counts as material.
+Materiality (%),0.1,When Prior is zero the % variance is undefined and the $ test decides alone.
+Pinned model version,jev-1.13.0,Must match the service's pin. A mismatch is reported as an error; it never switches the model.
+Health: never-fails rate,0.05,Prompt when a criterion's first-attempt fail rate is at or below this.
+Health: always-fails rate,0.6,Prompt when a criterion's first-attempt fail rate is at or above this.
+Health: near-threshold band,0.05,"Jev probabilities within this distance of the criterion's threshold count as near it. Jev's call-to-call spread is about 0.01, so 0.05 is close enough that a rerun could flip the verdict."
+Health: near-threshold share,0.35,Prompt when at least this share of a criterion's probabilities sit near its threshold.
+Health: flag-wrong weighted count,3,Prompt when weighted 'Flag was wrong' overrides on a criterion reach this.
+Health: missed-issue weighted count,3,Prompt when weighted 'Missed an issue' overrides on a criterion (or 'not covered') reach this.
+Health: reviewer override weight,2,Reviewer overrides count for more than preparer overrides.
+Health: preparer override weight,1,A preparer saying a flag is wrong starts a conversation; it still counts.
+Health: stale after (closes),2,Prompt when a criterion has not been reviewed in this many closes.
+Health: window (closes),1,How many recent closes the Log-based signals read.
+Minimum sample size,20,No prompt fires until a criterion has at least this many material lines behind it.
+Near-duplicate similarity,0.85,Commentary at or above this similarity to another line is flagged as a likely near-duplicate.
+Arithmetic tolerance ($),1000,"Cited amounts may miss the variance by the larger of this and Arithmetic tolerance (%), plus the rounding the citation implies."
+Arithmetic tolerance (%),0.01,Share of the variance allowed as tolerance.

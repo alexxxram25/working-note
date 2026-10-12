@@ -1,0 +1,37 @@
+text_id,account,comparison_basis,prior,current,commentary,C1,reason
+BLIND-01,4100 Usage revenue,MoM,520000,561000,Usage revenue grew $41K on higher customer activity in September.,fail,blind: category: activity
+BLIND-02,4100 Usage revenue,MoM,520000,561000,"Up $41K because Halden Logistics moved its EU shipments onto the platform on Sep 3; its usage was $38K for the month, and the rest is spread across existing accounts.",pass,blind: named customer and event
+BLIND-03,5000 Cloud hosting,MoM,312000,351000,Hosting rose $39K on increased compute consumption on our Nimbus Cloud account (Sep 1 to Sep 30).,fail,blind: category plus billing vendor and dates
+BLIND-04,5000 Cloud hosting,MoM,312000,351000,Hosting rose $39K: the load test for the Halden Logistics go-live ran on 400 extra nodes from Sep 15 to Sep 22 (ticket OPS-1182).,pass,blind: specific event with a ticket
+BLIND-05,6100 Software subscriptions,MoM,140000,172000,Up $32K: Lattice Analytics raised our seat price from $40 to $52 at the Sep 1 renewal (order LA-2209).,pass,blind: the vendor is the driver: a price change
+BLIND-06,6100 Software subscriptions,MoM,140000,172000,"Up $32K, mostly software renewals timing.",fail,blind: category: timing
+BLIND-07,6100 Software subscriptions,MoM,140000,172000,"Up $32K, invoiced by Lattice Analytics on Sep 1.",fail,blind: only who billed it
+BLIND-08,6200 Sales salaries,MoM,610000,648000,"Two account executives, Priya Nand and Tom Okafor, started Sep 2 under requisitions R-2291 and R-2292 ($19K a month each).",pass,blind: named hires
+BLIND-09,6200 Sales salaries,MoM,610000,648000,Up $38K on headcount growth in the sales team.,fail,blind: category: growth
+BLIND-10,6200 Sales salaries,MoM,610000,648000,Up $38K: new hires this month; see the September headcount report.,fail,blind: which hires? a report pointer is not a driver
+BLIND-11,7300 Foreign exchange loss,MoM,4000,61000,The loss is the month-end revaluation of the EUR 9.2M intercompany loan to Fernhill GmbH: EUR/USD fell from 1.112 to 1.106.,pass,blind: specific non-commercial driver
+BLIND-12,7300 Foreign exchange loss,MoM,4000,61000,FX loss of $57K from currency movements.,fail,blind: category
+BLIND-13,6500 Payroll taxes,MoM,301000,266000,"Down $35K because 41 engineers passed the $176,100 Social Security wage base in September, so employer OASDI stopped for them.",pass,"blind: statutory limit, specific"
+BLIND-14,6500 Payroll taxes,MoM,301000,266000,Payroll taxes down $35K due to seasonality.,fail,blind: category: seasonality
+BLIND-15,6340 Insurance,MoM,52000,77000,"Up $25K: the D&O policy renewed with Corvane Specialty on Sep 1 at $300K a year, so September carries $25K of amortization (policy DO-2026-114).",pass,blind: named policy renewal
+BLIND-16,6340 Insurance,MoM,52000,77000,"Insurance up $25K, booked to the Corvane Specialty prepaid account in September.",fail,blind: only where it was booked and who billed it
+BLIND-17,6320 Legal fees,MoM,40000,118000,Up $78K on the Brightline patent dispute: Harlow & Pike's August and September fees for the claim construction hearing (matter HP-3310).,pass,blind: named matter and firm
+BLIND-18,6320 Legal fees,MoM,40000,118000,Legal fees rose $78K because of higher legal activity during the month.,fail,blind: category: activity
+BLIND-19,6050 Engineering contractors,MoM,120000,82000,"Down $38K: the Quarry Labs SOW for the billing migration ended Aug 29 as planned (SOW-311), and no replacement started.",pass,blind: named contract ending
+BLIND-20,6050 Engineering contractors,MoM,120000,82000,Down $38K as contractor spend normalized.,fail,blind: category
+BLIND-21,4200 Professional services revenue,MoM,230000,192000,Down $38K because the Halden onboarding milestone slipped to October.,pass,blind: named customer and milestone
+BLIND-22,4200 Professional services revenue,MoM,230000,192000,Down $38K due to timing of milestones.,fail,blind: category: timing
+BLIND-23,6380 Bad debt expense,MoM,9000,54000,Up $45K: we reserved the full $45K balance of Corliss Retail after it filed for Chapter 11 on Sep 18.,pass,blind: named customer and event
+BLIND-24,6380 Bad debt expense,MoM,9000,54000,Up $45K on higher reserves given the credit environment.,fail,blind: category
+BLIND-25,6260 Events and sponsorships,MoM,12000,49000,"Up $37K for our booth at FinOps Summit in Austin (Sep 16 to 18), invoice FS-0918.",pass,blind: named event
+BLIND-26,6260 Events and sponsorships,MoM,12000,49000,Up $37K on events in September.,fail,blind: category
+BLIND-27,6010 Engineering bonuses,MoM,120000,168000,Up $48K: the board approved the H2 retention bonus pool on Sep 12 and we accrued September's $48K share (board minutes BM-0912).,pass,blind: specific approval
+BLIND-28,6010 Engineering bonuses,MoM,120000,168000,"Bonus accrual up $48K, true-up.",fail,blind: category: true-up of what?
+BLIND-29,6400 Depreciation,MoM,129000,158000,Up $29K: the Reno data center racks went into service Sep 1 ($1.74M over five years).,pass,blind: named assets placed in service
+BLIND-30,6400 Depreciation,MoM,129000,158000,Depreciation up $29K from new assets placed in service.,fail,blind: which assets?
+BLIND-31,5050 Third-party data licenses,MoM,96000,131000,"Up $35K on our Meridian Atlas data feed, billed Sep 1 ($35K).",fail,"blind: only who billed it, with an amount and date"
+BLIND-32,5050 Third-party data licenses,MoM,96000,131000,"Up $35K: Meridian Atlas added the Canadian freight-lane dataset to our contract on Sep 1 (amendment MA-07, $35K a month).",pass,blind: named contract change
+BLIND-33,6200 Sales salaries,MoM,610000,648000,"Up $38K: two account executives started Sep 2 (R-2291, R-2292).",pass,blind: hires identified by requisition
+BLIND-34,4000 Subscription revenue,MoM,4431000,4489000,"Up $58K: price uplifts on renewals, partly offset by churn.",fail,"blind: categories: which renewals, whose churn?"
+BLIND-35,4000 Subscription revenue,MoM,4431000,4489000,"Up $58K: the Kestrel Mutual renewal on Sep 1 added 300 seats ($61K a month), partly offset by Lumen Retail's cancellation ($3K).",pass,blind: named customers and events
+BLIND-36,6360 Travel and entertainment,MoM,131000,83000,"Down $48K: the August sales kickoff in Denver didn't recur ($30K), and the rest is lower travel generally.",pass,blind: one specific driver; the vague rest is C5's concern

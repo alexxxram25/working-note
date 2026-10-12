@@ -1,0 +1,45 @@
+current @ 0.91: balanced accuracy 0.778, AUC 0.921, fails caught 15/18, passes kept 13/18, within 0.05 of threshold 18/36
+      a @ 0.47: balanced accuracy 0.972, AUC 0.997, fails caught 17/18, passes kept 18/18, within 0.05 of threshold 0/36
+  A sensitivity @ 0.43: balanced accuracy 0.972, fails caught 17/18, passes kept 18/18
+  A sensitivity @ 0.70: balanced accuracy 0.972, fails caught 18/18, passes kept 17/18
+R1 balanced accuracy +0.05: PASS  R2 AUC: PASS  R3 pass recall >= 0.80: PASS
+DECISION: ship A (subject to R4)
+
+per text (label | today | A):
+  BLIND-01 fail | 0.30  | 0.05  | category: activity
+  BLIND-02 pass | 0.96  | 0.91  | named customer and event
+  BLIND-03 fail | 0.89  | 0.26  | category plus billing vendor and dates
+  BLIND-04 pass | 0.93  | 0.90  | specific event with a ticket
+  BLIND-05 pass | 0.97  | 0.94  | the vendor is the driver: a price change
+  BLIND-06 fail | 0.12  | 0.05  | category: timing
+  BLIND-07 fail | 0.93* | 0.10  | only who billed it
+  BLIND-08 pass | 0.96  | 0.90  | named hires
+  BLIND-09 fail | 0.45  | 0.06  | category: growth
+  BLIND-10 fail | 0.92* | 0.18  | which hires? a report pointer is not a driver
+  BLIND-11 pass | 0.83* | 0.87  | specific non-commercial driver
+  BLIND-12 fail | 0.28  | 0.06  | category
+  BLIND-13 pass | 0.89* | 0.76  | statutory limit, specific
+  BLIND-14 fail | 0.06  | 0.04  | category: seasonality
+  BLIND-15 pass | 0.96  | 0.88  | named policy renewal
+  BLIND-16 fail | 0.86  | 0.13  | only where it was booked and who billed it
+  BLIND-17 pass | 0.96  | 0.89  | named matter and firm
+  BLIND-18 fail | 0.18  | 0.04  | category: activity
+  BLIND-19 pass | 0.95  | 0.91  | named contract ending
+  BLIND-20 fail | 0.25  | 0.04  | category
+  BLIND-21 pass | 0.91  | 0.83  | named customer and milestone
+  BLIND-22 fail | 0.05  | 0.04  | category: timing
+  BLIND-23 pass | 0.96  | 0.94  | named customer and event
+  BLIND-24 fail | 0.15  | 0.05  | category
+  BLIND-25 pass | 0.96  | 0.81  | named event
+  BLIND-26 fail | 0.11  | 0.03  | category
+  BLIND-27 pass | 0.86* | 0.79  | specific approval
+  BLIND-28 fail | 0.05  | 0.05  | category: true-up of what?
+  BLIND-29 pass | 0.90* | 0.76  | named assets placed in service
+  BLIND-30 fail | 0.54  | 0.10  | which assets?
+  BLIND-31 fail | 0.94* | 0.59* | only who billed it, with an amount and date
+  BLIND-32 pass | 0.96  | 0.94  | named contract change
+  BLIND-33 pass | 0.95  | 0.88  | hires identified by requisition
+  BLIND-34 fail | 0.18  | 0.07  | categories: which renewals, whose churn?
+  BLIND-35 pass | 0.96  | 0.94  | named customers and events
+  BLIND-36 pass | 0.80* | 0.53  | one specific driver; the vague rest is C5's concern
+(* = wrong at that wording's threshold)

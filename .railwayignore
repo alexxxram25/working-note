@@ -1,0 +1,9 @@
+# `railway up` uploads this folder as the build context and already skips what
+# .gitignore lists. These are named again so secrets and local state stay out
+# even if .gitignore changes; .dockerignore then admits only what the image needs.
+.env
+.env.*
+backend/.env
+.pgdata/
+.venv/
+__pycache__/

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "working-note"
+version = "0.1.0"
+description = "Checks whether flux commentary is reviewable against the team's stated standard."
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+[tool.setuptools.packages.find]
+include = ["coach*"]
+
+[tool.pytest.ini_options]
+# `pythonpath` lets the suite run from a bare checkout (system Python 3.9
+# included) without installing the package first.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "postgres: needs COACH_TEST_DSN pointing at a disposable Postgres database",
+    "live: calls a real external API; never collected unless COACH_LIVE=1",
+    "e2e: starts a local server and drives the Apps Script harness through it",
+]
+
+[tool.coverage.run]
+source = ["coach"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
