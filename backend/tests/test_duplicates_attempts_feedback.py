@@ -178,6 +178,20 @@ def test_line_numbers_parse_accounting_formats():
     assert LineIn(line_id="x", variance_pct="(4.5%)").variance_pct == pytest.approx(-0.045)
 
 
+@pytest.mark.parametrize("value,expected", [(0.912, 0.912), ("91.2%", 0.912), ("0.6", 0.6), (0.85, 0.85), (0.999, 0.999)])
+def test_thresholds_with_up_to_three_decimals_are_read(value, expected):
+    assert Criterion(id="C1", threshold=value).threshold == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("value", [0.9125, "0.9125", "91.25%", 0.60001, 1 / 3])
+def test_thresholds_with_more_than_three_decimals_are_refused(value):
+    # The calibration fingerprint and the Criteria snapshot both carry the threshold
+    # to three decimals, so a finer value would be graded on one number and
+    # looked up (and recorded) under another.
+    with pytest.raises(ValueError, match="at most three decimals"):
+        Criterion(id="C1", threshold=value)
+
+
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), "nan", "inf", "Infinity", "-Infinity",
                                  "1e999", "#DIV/0!", "30,00O"])
 def test_nonfinite_and_junk_numbers_are_refused_everywhere(bad):

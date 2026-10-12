@@ -173,6 +173,11 @@ def test_bad_criteria_and_settings_are_422_with_reasons():
     assert response.status_code == 422
     problems = response.json()["detail"]["problems"]
     assert any("Criteria row 2" in p for p in problems) or any("more than once" in p for p in problems)
+    rows = [dict(r) for r in fernhill.criteria_rows()]
+    rows[0]["Threshold"] = 0.9125
+    response = start(client, criteria=rows)
+    assert response.status_code == 422
+    assert any("Criteria row 2" in p and "at most three decimals" in p for p in response.json()["detail"]["problems"])
     bad_settings = [{"Setting": "Minimum sample size", "Value": "lots"}]
     assert start(client, settings=bad_settings).status_code == 422
 

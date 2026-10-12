@@ -97,6 +97,10 @@ class Criterion(BaseModel):
             return None
         if not 0.0 < number < 1.0:
             raise ValueError("threshold must be between 0 and 1, got {0}".format(number))
+        # A calibration is identified by the threshold to three decimals (jev/questions.py);
+        # a fourth decimal would grade one way and be looked up as another.
+        if abs(number - round(number, 3)) > 1e-9:
+            raise ValueError("threshold may have at most three decimals, got {0!r}".format(number))
         return number
 
     @field_validator("active", mode="before")
