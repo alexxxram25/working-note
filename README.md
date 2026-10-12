@@ -174,7 +174,7 @@ Five starter criteria ship in the Criteria tab, plus RESTATE and the three rules
 
 A verdict depends on four things together: the model snapshot, the pass condition, the question builder's version and the threshold. Those four form the calibration's fingerprint, and the service looks it up on every run; the Calibration status in the sheet is a display of that lookup. Editing a pass condition or a threshold makes a criterion Uncalibrated until it is measured again.
 
-**What to expect from Jev.**
+**What to expect from Jev.** Why this design uses Jev for judgment and code for everything code can check, with the sources, their figures and their limits: [docs/why-jev.md](docs/why-jev.md).
 
 - **Jev reads literally.** Asked about C1, an early version of the question builder let "a large customer" pass because the word customer is in the condition. The stricter instruction in the current builder (qb-1.1.0) fixed most of that, and C1's tightened wording fixed the rest of what the labels showed. C5 still fails a single driver sized only by the total. When your reviewer disagrees with a flag, an Override of "Flag was wrong" records it, and Criteria Health raises a criterion that collects them. Details and the A/B evidence: [docs/question-builder.md](docs/question-builder.md).
 - **Thresholds aren't comparable across criteria.** C3's 0.15 and C1's 0.43 reflect how Jev's probabilities spread for each question, which is why each criterion has its own.
@@ -406,6 +406,6 @@ The v2 headline is a prior-period consistency check: flag commentary that contra
 | `apps_script/` | `Code.gs`, the manifest, clasp config, and the Node test harness |
 | `supporting/` | The onboarding prompt and the working-note-onboarding Skill |
 | `scripts/` | Migrations and the seed, database checks, team and sheet-key admin, Jev recording, calibration |
-| `docs/` | How a criterion becomes a Jev question, with the A/B evidence, and the C1 blind check |
+| `docs/` | Why Jev and code around it, with sources; how a criterion becomes a Jev question, with the A/B evidence; and the C1 blind check |
 
 MIT licensed. See [LICENSE](LICENSE).
