@@ -484,6 +484,42 @@ test('when every row has a broken cell nothing is sent and the alert lists each 
     /^Not graded: Current \(G\d\) is a spreadsheet error: #REF!$/));
 });
 
+test('a Line ID on two rows keeps both rows home, and both rows say so', () => {
+  const env = setup();
+  const flux = env.ss.getSheetByName('Flux');
+  const C = env.constants;
+  flux.getRange(5, 1, 1, C.FLUX_COLUMNS.length).setValues([C.FLUX_COLUMNS.map(h => ({
+    'Line ID': 'FHD-US|2026-09|MoM|5000', 'Entity': 'FHD-US', 'Period': '2026-09', 'Comparison basis': 'MoM',
+    'Account': '5000 Cloud hosting', 'Prior': 1000, 'Current': 50000, 'Variance ($)': 49000, 'Variance (%)': 49,
+    'Commentary': 'Hosting rose because the two rows share one ID.',
+  })[h] ?? '')]);
+  const reply = runResponse();
+  reply.results = reply.results.filter(r => r.line_id !== 'FHD-US|2026-09|MoM|5000');
+  const svc = service({ 'POST /v1/runs': () => json(200, reply), 'POST /v1/runs/*': () => json(200, {}) });
+  env.state.fetch = svc.fetch;
+  env.coach.runCoach();
+  const run = svc.calls.find(c => c.key === 'POST /v1/runs');
+  assert.deepEqual(run.payload.lines.map(l => l.line_id).sort(), ['FHD-US|2026-09|MoM|1200', 'FHD-US|2026-09|MoM|6400']);
+  const message = 'Not graded: Line ID appears on rows 2, 5: add a slice (entity|period|basis|account|slice) so each row has its own';
+  assert.equal(flux.value(2, 'Status'), message);
+  assert.equal(flux.value(5, 'Status'), message);
+  assert.equal(flux.styleAt(5, 'Status').bg, C.STATUS_STYLES.error.background);
+  assert.match(env.ss.toasts.at(-1), /2 not sent/);
+});
+
+test('a Line ID the service rejects is marked on every row that carries it', () => {
+  const env = setup();
+  const flux = env.ss.getSheetByName('Flux');
+  const table = env.coach.readTable_(flux, env.constants.FLUX_COLUMNS);
+  flux.setValueAt(3, 'Line ID', 'FHD-US|2026-09|MoM|5000'); // the sheet changed under us: two rows, one ID
+  const current = env.coach.readTable_(flux, env.constants.FLUX_COLUMNS);
+  env.coach.writeResults_(flux, current, [], {}, [{ line_id: 'FHD-US|2026-09|MoM|5000', error: 'Line ID appears 2 times in this run (rows 2, 3); none was graded' }]);
+  assert.equal(flux.value(2, 'Status'), 'Not graded: Line ID appears 2 times in this run (rows 2, 3); none was graded');
+  assert.equal(flux.value(3, 'Status'), 'Not graded: Line ID appears 2 times in this run (rows 2, 3); none was graded');
+  assert.equal(flux.value(4, 'Status'), '', 'an unrelated row is untouched');
+  assert.ok(table.rows.length === 3);
+});
+
 test('RAN marker', () => {
   console.log('RAN: apps script unit tests');
 });

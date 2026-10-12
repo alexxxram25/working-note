@@ -192,6 +192,22 @@ def test_nonfinite_numbers_are_422_not_500():
     assert response.json()["detail"]["message"] == "Fix the Settings tab"
 
 
+def test_a_repeated_line_id_is_rejected_in_every_occurrence_and_never_logged():
+    client, services = make()
+    body = run_body()
+    hosting = next(l for l in body["lines"] if l["line_id"] == HOSTING)
+    body["lines"].append(dict(hosting, commentary="Hosting rose because of something else entirely.", row=99))
+    response = client.post("/v1/runs", json=body, headers=as_preparer())
+    assert response.status_code == 200, response.text
+    out = response.json()
+    assert [r["line_id"] for r in out["rejected"]] == [HOSTING, HOSTING]
+    assert all("appears 2 times" in r["error"] for r in out["rejected"])
+    assert not any(r["line_id"] == HOSTING for r in out["results"])
+    assert out["summary"]["rejected"] == 2 and out["summary"]["lines"] == len(body["lines"]) - 2
+    assert not any(r["line_id"] == HOSTING for r in services.store.log_rows(SHEET))
+    assert services.store.prior_attempts(SHEET, [HOSTING]) == {}
+
+
 def test_a_run_with_every_criterion_switched_off_is_refused_not_passed():
     client, services = make()
     rows = [dict(r, **{"Active (Y/N)": "N"}) for r in fernhill.criteria_rows()]

@@ -209,12 +209,22 @@ def test_a_criterion_without_a_pass_condition_is_an_error_for_that_criterion_onl
 
 
 def test_malformed_and_repeated_line_ids_are_rejected():
-    good = line(1, "Hosting rose $60K because Orion Freight onboarded.")
-    out = run([good, good, LineIn(line_id="no-separators", commentary="x")], FakeJev({}))
-    assert len(out.results) == 1
-    assert {r["error"] for r in out.rejected} == {
-        "Line ID appears more than once in this run",
-        "Line ID needs entity|period|basis|account[|slice], got 1 part(s)"}
+    jev = FakeJev({})
+    twice = line(1, "Hosting rose $60K because Orion Freight onboarded.")
+    again = twice.model_copy(update={"commentary": "Hosting rose $60K because Orion Freight ran a data load.",
+                                     "row": 9})
+    once = line(2, "Payroll rose $60K because Orion Freight hired two engineers.")
+    out = run([twice.model_copy(update={"row": 5}), again, once, LineIn(line_id="no-separators", commentary="x")],
+              jev)
+    # Both occurrences of the repeated ID are rejected: neither is graded, logged or sent to Jev.
+    assert [r.line_id for r in out.results] == [once.line_id]
+    assert [c["commentary"] for c in jev.calls] == [once.commentary]
+    assert {r["line_id"] for r in out.log_rows} == {once.line_id}
+    assert [(r["line_id"], r["row"], r["error"]) for r in out.rejected] == [
+        (twice.line_id, "5", "Line ID appears 2 times in this run (rows 5, 9); none was graded"),
+        (twice.line_id, "9", "Line ID appears 2 times in this run (rows 5, 9); none was graded"),
+        ("no-separators", "", "Line ID needs entity|period|basis|account[|slice], got 1 part(s)"),
+    ]
 
 
 def test_attempt_numbers_follow_the_prior_attempt():

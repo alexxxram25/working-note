@@ -107,18 +107,23 @@ def run(config: PipelineConfig, lines: Sequence[LineIn],
 
     items: List[_Line] = []
     rejected: List[Dict[str, str]] = []
-    seen = set()
+    # A Line ID that appears twice is rejected in every occurrence, before any
+    # check runs. Grading the first and dropping the rest would attach one row's
+    # verdict to another row's text, and the Log would carry it under that ID.
+    rows_by_id: Dict[str, List[str]] = {}
+    for line in lines:
+        rows_by_id.setdefault(line.line_id, []).append(str(line.row or "?"))
     for line in lines:
         try:
             parts = parse_line_id(line.line_id)
         except LineIdError as exc:
             rejected.append({"line_id": line.line_id, "row": str(line.row or ""), "error": str(exc)})
             continue
-        if line.line_id in seen:
+        if len(rows_by_id[line.line_id]) > 1:
             rejected.append({"line_id": line.line_id, "row": str(line.row or ""),
-                             "error": "Line ID appears more than once in this run"})
+                             "error": "Line ID appears {0} times in this run (rows {1}); none was graded".format(
+                                 len(rows_by_id[line.line_id]), ", ".join(rows_by_id[line.line_id]))})
             continue
-        seen.add(line.line_id)
         item = _Line(line=line, period=parts.period)
         try:
             item.variance = variance_of(line.prior, line.current, line.variance_usd, line.variance_pct)

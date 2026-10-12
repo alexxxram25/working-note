@@ -227,7 +227,21 @@ function readLines_(table) {
     if (errors.length) problems.push({ line_id: line.line_id, row: row.rowIndex, error: errors.join('; ') });
     else lines.push(line);
   });
-  return { lines: lines, problems: problems };
+  // A Line ID on two rows is two rows with one identity: the service would file
+  // one row's verdict under the other's text. Neither is sent; both say why.
+  const rowsById = {};
+  lines.concat(problems).forEach(l => { (rowsById[l.line_id] = rowsById[l.line_id] || []).push(l.row); });
+  const kept = [];
+  lines.forEach(line => {
+    const rows = rowsById[line.line_id];
+    if (rows.length === 1) {
+      kept.push(line);
+      return;
+    }
+    problems.push({ line_id: line.line_id, row: line.row, error: 'Line ID appears on rows ' +
+      rows.slice().sort((a, b) => a - b).join(', ') + ': add a slice (entity|period|basis|account|slice) so each row has its own' });
+  });
+  return { lines: kept, problems: problems };
 }
 
 function writeResults_(sheet, table, results, sent, rejected) {
