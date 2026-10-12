@@ -251,6 +251,27 @@ def test_log_rows_carry_the_spec_columns():
     assert by_id["ARITH"]["criterion_version"] == 1
 
 
+def test_the_heartbeat_beats_once_per_jev_answer_and_can_stop_the_run():
+    beats = []
+    rows = criteria()
+    lines = [line(i, "Hosting rose $60K because Orion Freight onboarded, line {0}.".format(i)) for i in range(3)]
+    config = pipeline.PipelineConfig(criteria=rows, settings=Settings(), calibration=calibrated(rows),
+                                     jev=FakeJev({}), heartbeat=lambda: beats.append(1))
+    pipeline.run(config, lines)
+    assert len(beats) == 3
+
+    class Lost(RuntimeError):
+        pass
+
+    def lose():
+        raise Lost()
+
+    config = pipeline.PipelineConfig(criteria=rows, settings=Settings(), calibration=calibrated(rows),
+                                     jev=FakeJev({}), heartbeat=lose)
+    with pytest.raises(Lost):
+        pipeline.run(config, lines)
+
+
 def test_one_request_per_line_with_every_jev_question():
     jev = FakeJev({})
     lines = [line(i, "Line {0}: hosting rose $60K because customer {0} onboarded.".format(i)) for i in range(1, 6)]

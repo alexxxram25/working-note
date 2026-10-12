@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from . import feedback
 from .attempts import PriorAttempt, next_attempt
@@ -49,6 +49,9 @@ class PipelineConfig:
     criteria_versions: Dict[str, int] = field(default_factory=dict)
     jev_concurrency: int = 8
     session_id: Optional[str] = None
+    # Called as each line's Jev answer arrives: the API renews the write lease
+    # here, so a long run does not outlive the lease it took at the start.
+    heartbeat: Optional[Callable[[], None]] = None
 
 
 @dataclass
@@ -215,6 +218,8 @@ def run(config: PipelineConfig, lines: Sequence[LineIn],
                     responses[line_id] = future.result()
                 except JevError as exc:
                     responses[line_id] = exc
+                if config.heartbeat is not None:
+                    config.heartbeat()
 
     jev_requests = 0
     for item in to_jev:

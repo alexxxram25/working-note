@@ -197,6 +197,67 @@ def test_nonfinite_numbers_are_422_not_500():
     assert response.json()["detail"]["message"] == "Fix the Settings tab"
 
 
+def test_results_of_a_run_whose_lease_was_taken_over_are_discarded():
+    from coach.store.base import utcnow
+    import datetime as dt
+    import uuid
+
+    client, services = make()
+    store = services.store
+    intruder = str(uuid.uuid4())
+
+    class Stealing(FakeJev):
+        def evaluate(self, state, questions, session_id=None):
+            if not self.calls:
+                # The lease lapses mid-run and another run takes the sheet.
+                run_id, holder, _ = store._locks[SHEET]
+                store._locks[SHEET] = (run_id, holder, utcnow() - dt.timedelta(seconds=1))
+                assert store.acquire_lock(SHEET, intruder, "intruder@example.com", 60).acquired
+            return super().evaluate(state, questions, session_id)
+
+    services.jev = Stealing()
+    response = start(client)
+    assert response.status_code == 409, response.text
+    assert "discarded" in response.json()["detail"]
+    assert store.log_rows(SHEET) == [], "nothing from the superseded run reached the Log"
+    runs = [r for r in store._runs.values() if r["sheet_id"] == SHEET]
+    assert len(runs) == 1 and runs[0]["status"] == "failed" and runs[0]["error"] == "LeaseLost"
+    # The intruder's lease is untouched: the loser did not free a lease it did not hold.
+    assert not store.acquire_lock(SHEET, str(uuid.uuid4()), "x@example.com", 60).acquired
+    assert store.release_lock(SHEET, intruder)
+    services.jev = FakeJev()
+    assert start(client).status_code == 200
+
+
+def test_the_lease_heartbeat_renews_at_most_every_third_of_the_ttl_and_reports_a_lost_lease(monkeypatch):
+    from coach.api import _lease_heartbeat
+    from coach.store.base import LeaseLost
+    from coach import api as api_module
+
+    clock = [1000.0]
+    monkeypatch.setattr(api_module.time, "monotonic", lambda: clock[0])
+    renewals = []
+
+    class Renewing:
+        def renew_lock(self, sheet_id, run_id, ttl):
+            renewals.append((sheet_id, run_id, ttl))
+            return len(renewals) < 3
+
+    beat = _lease_heartbeat(Renewing(), "s", "r", 180)
+    for _ in range(5):
+        beat()
+    assert renewals == [], "nothing to renew within the first third of the TTL"
+    clock[0] += 61
+    beat()
+    assert renewals == [("s", "r", 180)]
+    clock[0] += 61
+    beat()
+    clock[0] += 61
+    with pytest.raises(LeaseLost):
+        beat()
+    assert len(renewals) == 3
+
+
 def test_a_repeated_line_id_is_rejected_in_every_occurrence_and_never_logged():
     client, services = make()
     body = run_body()

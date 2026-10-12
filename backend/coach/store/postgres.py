@@ -25,7 +25,7 @@ from ..hashing import commentary_hash, sha256_hex
 from ..jev.client import JevAnswer
 from ..jev.replay import CachedAnswer
 from ..models import LineIn
-from .base import LOG_FIELDS, LockState, SheetKey, Store, TeamMember, utcnow
+from .base import LOG_FIELDS, LeaseLost, LockState, SheetKey, Store, TeamMember, utcnow
 
 try:  # pragma: no cover - import guard
     import psycopg
@@ -196,6 +196,13 @@ class PostgresStore(Store):
             return conn.execute("delete from run_locks where sheet_id = %s and run_id = %s",
                                 (sheet_id, run_id)).rowcount == 1
 
+    def renew_lock(self, sheet_id, run_id, ttl_seconds) -> bool:
+        with self._connect() as conn:
+            return conn.execute(
+                "update run_locks set expires_at = now() + make_interval(secs => %s)"
+                " where sheet_id = %s and run_id = %s and expires_at > now()",
+                (ttl_seconds, sheet_id, run_id)).rowcount == 1
+
     def create_run(self, run: Dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -227,6 +234,13 @@ class PostgresStore(Store):
     def record_evaluation(self, sheet_id, run_id, lines: Sequence[LineIn], log_rows, counts) -> None:
         with self._connect() as conn:
             with conn.transaction():
+                # The fence. Locking the lease row holds off a takeover (acquire_lock's
+                # upsert waits on it) until this transaction commits or rolls back.
+                lease = conn.execute(
+                    "select run_id::text as run_id, expires_at > now() as live from run_locks"
+                    " where sheet_id = %s for update", (sheet_id,)).fetchone()
+                if lease is None or lease["run_id"] != str(run_id) or not lease["live"]:
+                    raise LeaseLost("run {0} no longer holds the write lease for this sheet".format(run_id))
                 for line in lines:
                     conn.execute(
                         "insert into lines (sheet_id, line_id, entity, close_period, comparison_basis, account,"

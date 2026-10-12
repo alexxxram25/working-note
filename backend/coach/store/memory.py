@@ -18,7 +18,7 @@ from ..hashing import commentary_hash, sha256_hex
 from ..jev.client import JevAnswer
 from ..jev.replay import CachedAnswer
 from ..models import LineIn
-from .base import LOG_FIELDS, LockState, SheetKey, Store, TeamMember, utcnow
+from .base import LOG_FIELDS, LeaseLost, LockState, SheetKey, Store, TeamMember, utcnow
 
 
 class MemoryStore(Store):
@@ -169,6 +169,20 @@ class MemoryStore(Store):
                 return True
             return False
 
+    def renew_lock(self, sheet_id: str, run_id: str, ttl_seconds: int) -> bool:
+        with self._lock:
+            now = utcnow()
+            current = self._locks.get(sheet_id)
+            if current is None or current[0] != run_id or current[2] < now:
+                return False
+            self._locks[sheet_id] = (run_id, current[1], now + dt.timedelta(seconds=ttl_seconds))
+            return True
+
+    def _require_lease(self, sheet_id: str, run_id: str) -> None:
+        current = self._locks.get(sheet_id)
+        if current is None or current[0] != run_id or current[2] < utcnow():
+            raise LeaseLost("run {0} no longer holds the write lease for this sheet".format(run_id))
+
     def create_run(self, run: Dict[str, Any]) -> None:
         with self._lock:
             record = dict(run)
@@ -193,6 +207,7 @@ class MemoryStore(Store):
 
     def record_evaluation(self, sheet_id, run_id, lines: Sequence[LineIn], log_rows, counts) -> None:
         with self._lock:
+            self._require_lease(sheet_id, run_id)
             now = utcnow()
             for line in lines:
                 key = (sheet_id, line.line_id)

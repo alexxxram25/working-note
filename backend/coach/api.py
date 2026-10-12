@@ -44,7 +44,7 @@ from .jev.thresholds import CALIBRATED, UNCALIBRATED, CalibrationIndex
 from .line_ids import LineIdError, parse_line_id
 from .models import Criterion, LineIn, Settings
 from .seed import seed_defaults, settings_rows
-from .store.base import Store, StoreJevCache
+from .store.base import LeaseLost, Store, StoreJevCache
 from .store.memory import MemoryStore
 
 log = logging.getLogger("coach")
@@ -412,6 +412,7 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
             output = pipeline.run(pipeline.PipelineConfig(
                 criteria=criteria, settings=settings, calibration=calibration, jev=services.jev,
                 criteria_versions=versions, jev_concurrency=config.jev_concurrency, session_id=run_id,
+                heartbeat=_lease_heartbeat(store, body.sheet_id, run_id, config.lock_ttl_seconds),
             ), body.lines, prior)
             rejected_ids = {r["line_id"] for r in output.rejected}
             evaluated = [l for l in body.lines if l.line_id not in rejected_ids]
@@ -420,6 +421,18 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
                 "lines_evaluated": sum(1 for r in output.results if r.material),
                 "jev_requests": output.jev_requests,
             })
+        except LeaseLost:
+            # The lease lapsed or was taken over while this run was evaluating. Its
+            # results describe text another run may since have graded: discard them.
+            if created:
+                try:
+                    services.store.finish_run(run_id, "failed", error="LeaseLost")
+                except Exception:  # noqa: BLE001
+                    log.exception("could not mark run %s failed", run_id)
+            services.store.release_lock(body.sheet_id, run_id)
+            raise HTTPException(409, detail=(
+                "This run took longer than its write lease and another run may have started since; its "
+                "results were discarded and nothing was written. Run Coach again."))
         except Exception as exc:
             if created:
                 try:
@@ -552,6 +565,26 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
         return response
 
     return app
+
+
+def _lease_heartbeat(store: Store, sheet_id: str, run_id: str, ttl_seconds: int):
+    """Renew the write lease as Jev answers arrive, at most every third of its TTL.
+
+    Renewal is one UPDATE, so it is cheap; and a lease that can no longer be
+    renewed is a lease lost, reported now rather than after every line was graded.
+    """
+    interval = max(1.0, ttl_seconds / 3.0)
+    last = [time.monotonic()]
+
+    def beat() -> None:
+        now = time.monotonic()
+        if now - last[0] < interval:
+            return
+        last[0] = now
+        if not store.renew_lock(sheet_id, run_id, ttl_seconds):
+            raise LeaseLost("run {0} could not renew the write lease for this sheet".format(run_id))
+
+    return beat
 
 
 def _iso(value: Any) -> Any:
