@@ -112,6 +112,24 @@ def test_every_append_only_table_refuses_update(fresh_db):
             conn.execute("update jev_responses set probability = 0.9")
 
 
+def test_rounded_cache_rows_from_before_0005_are_never_read(fresh_db):
+    """A generation-1 row (rounded) does not answer, and does not block the exact answer being cached."""
+    from coach.jev.client import JevAnswer
+    from coach.store.postgres import PostgresStore
+
+    with psycopg.connect(fresh_db) as conn:
+        conn.execute(
+            "insert into jev_responses (fingerprint, precision_generation, model_snapshot, question_id,"
+            " probability, source) values ('q:old', 1, 'typesafe/jev-1.13-20260917', 'C1', 0.9000, 'live')")
+        column = conn.execute("select data_type from information_schema.columns"
+                              " where table_name = 'jev_responses' and column_name = 'probability'").fetchone()[0]
+    assert column == "double precision"
+    store = PostgresStore(fresh_db)
+    assert store.jev_cache_get("q:old") is None
+    store.jev_cache_put("q:old", "C1", JevAnswer(0.89996, "typesafe/jev-1.13-20260917", "live"), {})
+    assert store.jev_cache_get("q:old").probability == 0.89996
+
+
 def test_resubmitted_override_is_a_no_op(fresh_db):
     insert = (
         "insert into overrides (sheet_id, close_period, line_id, kind, criterion_id, not_covered,"

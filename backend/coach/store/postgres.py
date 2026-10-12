@@ -35,6 +35,12 @@ except Exception:  # noqa: BLE001
     psycopg = None
 
 
+# db/migrations/0005: cached probabilities before it were rounded to four
+# decimals. Those rows stay (the table is append-only) as generation 1; the
+# service reads and writes generation 2 only.
+JEV_CACHE_GENERATION = 2
+
+
 class PostgresStore(Store):
     kind = "postgres"
 
@@ -329,19 +335,23 @@ class PostgresStore(Store):
     # Jev cache -------------------------------------------------------------
     def jev_cache_get(self, fingerprint):
         with self._connect() as conn:
-            row = conn.execute("select probability, model_snapshot from jev_responses where fingerprint = %s",
-                               (fingerprint,)).fetchone()
+            row = conn.execute(
+                "select probability, model_snapshot from jev_responses"
+                " where fingerprint = %s and precision_generation = %s",
+                (fingerprint, JEV_CACHE_GENERATION)).fetchone()
         return CachedAnswer(float(row["probability"]), row["model_snapshot"]) if row else None
 
     def jev_cache_put(self, fingerprint, question_id, answer: JevAnswer, usage, source="live") -> None:
         tokens = usage.get("input_tokens") if isinstance(usage.get("input_tokens"), int) else None
         cost = usage.get("cost")
         with self._connect() as conn:
+            # The probability goes in as received: a cached rerun must grade exactly as the live run did.
             conn.execute(
-                "insert into jev_responses (fingerprint, model_snapshot, question_id, probability, source,"
-                " input_tokens, cost_usd) values (%s, %s, %s, %s, %s, %s, %s) on conflict do nothing",
-                (fingerprint, answer.model, question_id, round(answer.probability, 4), source, tokens,
-                 cost if isinstance(cost, (int, float)) else None))
+                "insert into jev_responses (fingerprint, precision_generation, model_snapshot, question_id,"
+                " probability, source, input_tokens, cost_usd) values (%s, %s, %s, %s, %s, %s, %s, %s)"
+                " on conflict do nothing",
+                (fingerprint, JEV_CACHE_GENERATION, answer.model, question_id, float(answer.probability), source,
+                 tokens, cost if isinstance(cost, (int, float)) else None))
 
     # health ----------------------------------------------------------------
     def save_health(self, sheet_id, health_run_id, rows, generated_by) -> None:

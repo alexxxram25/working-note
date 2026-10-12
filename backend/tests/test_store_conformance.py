@@ -18,6 +18,7 @@ from coach import criteria_versions
 from coach.attempts import PriorAttempt
 from coach.hashing import commentary_hash
 from coach.jev.client import JevAnswer
+from coach.jev.thresholds import grade
 from coach.models import Criterion, LineIn
 from coach.store.base import SheetKey
 from coach.store.memory import MemoryStore
@@ -224,6 +225,18 @@ def test_jev_cache(store):
     assert cached.probability == pytest.approx(0.42) and cached.model == "typesafe/jev-1.13-20260917"
     store.jev_cache_put("q:1", "C1", JevAnswer(0.99, "other", "live"), {})  # first answer wins
     assert store.jev_cache_get("q:1").probability == pytest.approx(0.42)
+
+
+def test_a_cached_answer_grades_exactly_as_the_live_one_did(store):
+    # 0.89996 against a threshold of 0.900 is a fail. Rounded to four decimals on
+    # the way into the cache it read 0.9000, and the rerun of the same text passed.
+    live = 0.89996
+    store.jev_cache_put("q:edge", "C1", JevAnswer(live, "typesafe/jev-1.13-20260917", "live"), {})
+    cached = store.jev_cache_get("q:edge").probability
+    assert cached == live, "the cache must hand back the float it was given, not a rounding of it"
+    assert grade(live, 0.9, True).result == grade(cached, 0.9, True).result == "fail"
+    store.jev_cache_put("q:long", "C1", JevAnswer(0.123456789012345, "typesafe/jev-1.13-20260917", "live"), {})
+    assert store.jev_cache_get("q:long").probability == 0.123456789012345
 
 
 def test_health_rows_and_resolution(store):
