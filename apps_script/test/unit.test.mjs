@@ -430,6 +430,60 @@ test('configure service insists on https', () => {
   assert.equal(env.props.script.getProperty('COACH_SHEET_KEY'), 'fcc_k_x_y');
 });
 
+test('number cells: blank is not given, a broken cell is an error that names itself', () => {
+  const n = setup().coach.numberOrNull_;
+  assert.equal(n(''), null);
+  assert.equal(n(null), null);
+  assert.equal(n('n/a'), null);
+  assert.equal(n(409000), 409000);
+  assert.equal(n('$7,598,000'), 7598000);
+  assert.equal(n('(1,200)'), -1200);
+  assert.equal(n('4.5%'), 0.045);
+  assert.equal(n('(4.5%)'), -0.045);
+  for (const bad of ['#DIV/0!', '#REF!', '#N/A', '30,00O', 'Infinity', '1e999', 'abc', NaN, Infinity]) {
+    assert.throws(() => n(bad), /is (not a (finite )?number|a spreadsheet error): /, String(bad));
+  }
+  assert.equal(setup().coach.cellA1_(7, 7), 'G7');
+  assert.equal(setup().coach.cellA1_(2, 27), 'AA2');
+});
+
+test('a row with a broken number cell is not sent; its Status names the cell', () => {
+  const env = setup();
+  const flux = env.ss.getSheetByName('Flux');
+  const ar = flux.rowWhere('Line ID', 'FHD-US|2026-09|MoM|1200');
+  flux.setValueAt(ar, 'Prior', '30,00O');
+  flux.setValueAt(ar, 'Variance (%)', '#DIV/0!');
+  const reply = runResponse();
+  reply.rejected = [];
+  const svc = service({ 'POST /v1/runs': () => json(200, reply), 'POST /v1/runs/*': () => json(200, {}) });
+  env.state.fetch = svc.fetch;
+  env.coach.runCoach();
+  const run = svc.calls.find(c => c.key === 'POST /v1/runs');
+  assert.deepEqual(run.payload.lines.map(l => l.line_id).sort(), ['FHD-US|2026-09|MoM|5000', 'FHD-US|2026-09|MoM|6400'],
+    'the broken row stays home');
+  assert.equal(flux.value(ar, 'Status'),
+    'Not graded: Prior (F4) is not a number: 30,00O; Variance (%) (I4) is a spreadsheet error: #DIV/0!');
+  assert.equal(flux.styleAt(ar, 'Status').bg, env.constants.STATUS_STYLES.error.background);
+  assert.equal(flux.value(flux.rowWhere('Line ID', 'FHD-US|2026-09|MoM|5000'), 'Status'), 'Needs revision',
+    'the other rows are graded as usual');
+  assert.match(env.ss.toasts.at(-1), /1 not sent \(see Status for the cell to fix\)/);
+  const done = svc.calls.find(c => c.key.endsWith('/complete'));
+  assert.deepEqual(done.payload.written.sort(), ['FHD-US|2026-09|MoM|5000', 'FHD-US|2026-09|MoM|6400']);
+});
+
+test('when every row has a broken cell nothing is sent and the alert lists each cell', () => {
+  const env = setup();
+  const flux = env.ss.getSheetByName('Flux');
+  [2, 3, 4].forEach(row => flux.getRange(row, env.constants.FLUX_COLUMNS.indexOf('Current') + 1).setValue('#REF!'));
+  const svc = service({ 'POST /v1/runs': () => json(200, runResponse()) });
+  env.state.fetch = svc.fetch;
+  env.coach.runCoach();
+  assert.equal(svc.calls.length, 0, 'no run was started');
+  assert.match(env.ui.alerts.at(-1), /no line could be checked\.\n- Current \(G2\) is a spreadsheet error: #REF!/);
+  [2, 3, 4].forEach(row => assert.match(String(flux.getRange(row, env.constants.FLUX_COLUMNS.indexOf('Status') + 1).getValue()),
+    /^Not graded: Current \(G\d\) is a spreadsheet error: #REF!$/));
+});
+
 test('RAN marker', () => {
   console.log('RAN: apps script unit tests');
 });

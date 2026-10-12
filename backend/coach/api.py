@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
@@ -289,6 +290,19 @@ def create_app(config: Optional[Config] = None, services: Optional[Services] = N
             "status": response.status_code, "ms": int((time.monotonic() - started) * 1000),
         }))
         return response
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, exc: RequestValidationError):
+        # FastAPI's default handler echoes the offending input, which here may be
+        # commentary text, and fails outright on NaN (not JSON). Report where and
+        # why, never what.
+        problems = []
+        for err in exc.errors():
+            loc = [str(p) for p in err.get("loc", ()) if p != "body"]
+            problems.append("{0}: {1}".format(".".join(loc) or "body", err.get("msg", "invalid")))
+        return JSONResponse(status_code=422, content={
+            "detail": {"message": "The request could not be read", "problems": problems},
+            "request_id": getattr(request.state, "request_id", None)})
 
     @app.exception_handler(AuthError)
     async def auth_error(request: Request, exc: AuthError):

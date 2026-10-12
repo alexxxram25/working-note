@@ -5,7 +5,7 @@ import pytest
 from coach import feedback
 from coach.attempts import PriorAttempt, is_second_attempt, next_attempt
 from coach.checks.duplicates import find, normalize_near, similarity
-from coach.models import CheckOutcome, Criterion, LineIn, Settings
+from coach.models import CheckOutcome, Criterion, LineIn, Settings, parse_number
 
 # --- duplicates ----------------------------------------------------------------
 
@@ -175,3 +175,20 @@ def test_settings_read_percentages_however_typed():
 def test_line_numbers_parse_accounting_formats():
     line = LineIn(line_id="x", prior="(1,200)", current="$3,400", variance_pct="", commentary=None)
     assert (line.prior, line.current, line.variance_pct, line.commentary) == (-1200.0, 3400.0, None, "")
+    assert LineIn(line_id="x", variance_pct="(4.5%)").variance_pct == pytest.approx(-0.045)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), "nan", "inf", "Infinity", "-Infinity",
+                                 "1e999", "#DIV/0!", "30,00O"])
+def test_nonfinite_and_junk_numbers_are_refused_everywhere(bad):
+    with pytest.raises(ValueError):
+        parse_number(bad)
+    with pytest.raises(ValueError):
+        LineIn(line_id="x", prior=bad)
+    with pytest.raises(ValueError):
+        Criterion(id="C1", threshold=bad)
+    for setting in ("Minimum sample size", "Materiality ($)", "Materiality (%)", "Health: reviewer override weight"):
+        with pytest.raises(ValueError):  # a count of infinity used to be an OverflowError, a 500
+            Settings.from_sheet_rows([{"Setting": setting, "Value": bad}])
+    with pytest.raises(ValueError):
+        Settings(materiality_usd=float("inf"))

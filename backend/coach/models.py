@@ -7,6 +7,7 @@ threshold must be a probability; a materiality % must be a fraction once read).
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, ClassVar, Dict, List, Optional
 
@@ -22,25 +23,34 @@ _NUMBER_JUNK = re.compile(r"[,$\s]")
 
 
 def parse_number(value: Any) -> Optional[float]:
-    """Spreadsheet numbers: '', None and 'n/a' are missing; '(1,200)' is negative."""
+    """Spreadsheet numbers: '', None and 'n/a' are missing; '(1,200)' is negative.
+
+    NaN and the infinities are refused, not passed through: JSON parsers accept
+    them, a comparison against one is quietly false, and int() of one is a crash.
+    """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip()
-    if not text or text.lower() in ("n/a", "na", "-", "none"):
-        return None
-    negative = text.startswith("(") and text.endswith(")")
-    text = _NUMBER_JUNK.sub("", text.strip("()"))
-    percent = text.endswith("%")
-    text = text.rstrip("%")
-    try:
-        number = float(text)
-    except ValueError:
-        raise ValueError("not a number: {0!r}".format(value))
-    if percent:
-        number /= 100.0
-    return -number if negative else number
+        number = float(value)
+    else:
+        text = str(value).strip()
+        if not text or text.lower() in ("n/a", "na", "-", "none"):
+            return None
+        negative = text.startswith("(") and text.endswith(")")
+        text = _NUMBER_JUNK.sub("", text.strip("()"))
+        percent = text.endswith("%")
+        text = text.rstrip("%")
+        try:
+            number = float(text)
+        except ValueError:
+            raise ValueError("not a number: {0!r}".format(value))
+        if percent:
+            number /= 100.0
+        if negative:
+            number = -number
+    if not math.isfinite(number):
+        raise ValueError("not a finite number: {0!r}".format(value))
+    return number
 
 
 def parse_flag(value: Any) -> bool:
@@ -176,6 +186,8 @@ class Settings(BaseModel):
                      "health_missed_min", "health_reviewer_weight", "health_preparer_weight")
     @classmethod
     def _non_negative(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("must be a finite number")
         if value < 0:
             raise ValueError("must not be negative")
         return value

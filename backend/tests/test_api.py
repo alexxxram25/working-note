@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -173,6 +175,21 @@ def test_bad_criteria_and_settings_are_422_with_reasons():
     assert any("Criteria row 2" in p for p in problems) or any("more than once" in p for p in problems)
     bad_settings = [{"Setting": "Minimum sample size", "Value": "lots"}]
     assert start(client, settings=bad_settings).status_code == 422
+
+
+def test_nonfinite_numbers_are_422_not_500():
+    client, _ = make()
+    # JSON parsers accept NaN and Infinity tokens; the service must not.
+    body = run_body()
+    body["lines"][0]["prior"] = float("nan")
+    response = client.post("/v1/runs", content=json.dumps(body), headers=dict(as_preparer(),
+                                                                                **{"Content-Type": "application/json"}))
+    assert response.status_code == 422, response.text
+    assert "finite" in response.text
+    infinite = [{"Setting": "Minimum sample size", "Value": "Infinity"}]
+    response = start(client, settings=infinite)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["message"] == "Fix the Settings tab"
 
 
 def test_a_run_with_every_criterion_switched_off_is_refused_not_passed():
