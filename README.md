@@ -2,6 +2,8 @@
 
 A coach for financial variance commentary. The site, with the film and a bench to try: [working-note.lovable.app](https://working-note.lovable.app).
 
+A working prototype. No team has run it on a real close yet; everything here was built and tested on Fernhill Data, a fictional company.
+
 Working Note is a Google Sheet and a small Python service that check whether flux commentary can be reviewed against a team's own written standard, before it reaches the reviewer. In the sheet it is the **Coach** menu, and this README calls it the Coach for short.
 
 Most finance AI starts by drafting the work. That removes the loop where judgment develops: write the explanation, get it marked up, revise. The Coach keeps that loop. The controller writes the standard down once and tunes it as the team and the business change. The preparer writes the commentary, gets that controller's feedback immediately, revises, and hands over cleaner work. Preparers get the markup earlier; reviewers repeat themselves less.
