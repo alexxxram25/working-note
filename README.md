@@ -1,6 +1,6 @@
 # Working Note
 
-A coach for financial variance commentary.
+A coach for financial variance commentary. The site, with the film and a bench to try: [working-note.lovable.app](https://working-note.lovable.app).
 
 Working Note is a Google Sheet and a small Python service that check whether flux commentary can be reviewed against a team's own written standard, before it reaches the reviewer. In the sheet it is the **Coach** menu, and this README calls it the Coach for short.
 
@@ -60,7 +60,7 @@ The manifest (`apps_script/appsscript.json`) asks for five scopes and nothing el
 - the commentary;
 - for each active criterion Jev grades, its "Passes when" text and a fixed instruction.
 
-Never sent: entity, period, Line ID, anyone's email, or a criterion's name, feedback, rationale or example. Through OpenRouter every request sets `data_collection: "deny"`, so it is only routed to providers that don't store or train on prompts, and `allow_fallbacks: false`, so it is never silently answered by another model. The run's random ID goes along as the session ID. Field by field: [docs/question-builder.md](docs/question-builder.md).
+Never sent: entity, period, Line ID, anyone's email, or a criterion's name, feedback, rationale or example. Through OpenRouter every request sets `data_collection: "deny"` (the default; `JEV_DATA_COLLECTION` changes it), so OpenRouter routes it only to providers it lists as not collecting prompts, and `allow_fallbacks: false`, so it is never silently routed to a backup provider. A deployment that calls TypeSafe directly skips OpenRouter, and TypeSafe's own policy applies. The run's random ID goes along as the session ID. Field by field: [docs/question-builder.md](docs/question-builder.md).
 
 **Your Google account email.** The service reads it from the verified identity token to look up your role in the team list, and to record who did what: who started a run, who submitted an override, who edited a criterion. If Google doesn't share an email (it can withhold it, most often outside a shared Google Workspace domain), you are treated as a preparer and your overrides save without attribution.
 
